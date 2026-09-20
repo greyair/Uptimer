@@ -505,6 +505,7 @@ export interface CustomWebhookChannelConfig {
   payload_type?: 'json' | 'param' | 'x-www-form-urlencoded';
   message_template?: string;
   payload_template?: unknown;
+  monitor_ids?: number[];
   enabled_events?: Array<
     | 'monitor.down'
     | 'monitor.up'
@@ -534,6 +535,7 @@ export interface TelegramChannelConfig {
   timeout_ms?: number;
   message_template?: string;
   enabled_events?: CustomWebhookChannelConfig['enabled_events'];
+  monitor_ids?: number[];
   parse_mode?: TelegramParseMode;
   disable_notification?: boolean;
   protect_content?: boolean;
@@ -551,6 +553,7 @@ export interface WpushChannelConfig {
   title_template?: string;
   message_template?: string;
   enabled_events?: CustomWebhookChannelConfig['enabled_events'];
+  monitor_ids?: number[];
 }
 
 
