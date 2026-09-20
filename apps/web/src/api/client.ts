@@ -35,6 +35,7 @@ import type {
   MonitorOutagesResponse,
   PublicHomepageResponse,
   PublicGlobalpingStatusResponse,
+  GlobalpingHistoryResponse,
   UptimeResponse,
 } from './types';
 
@@ -305,6 +306,21 @@ export async function fetchPublicGlobalpingStatus(): Promise<PublicGlobalpingSta
 
   const res = await fetch(url, auth.fetchInit);
   const data = await handleResponse<PublicGlobalpingStatusResponse>(res);
+  if (!auth.shouldBypassCache) setCachedPublic(url, data);
+  return data;
+}
+
+export async function fetchGlobalpingHistory(
+  monitorId: number,
+  range: '24h' = '24h',
+): Promise<GlobalpingHistoryResponse> {
+  const url = `${API_BASE}/public/monitors/${monitorId}/globalping-history?range=${range}`;
+  const auth = getOptionalPublicAuth();
+  const cached = auth.shouldBypassCache ? null : getCachedPublic<GlobalpingHistoryResponse>(url);
+  if (cached) return cached;
+
+  const res = await fetch(url, auth.fetchInit);
+  const data = await handleResponse<GlobalpingHistoryResponse>(res);
   if (!auth.shouldBypassCache) setCachedPublic(url, data);
   return data;
 }
