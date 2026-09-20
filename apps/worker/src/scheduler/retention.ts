@@ -46,5 +46,29 @@ export async function runRetention(env: Env, controller: ScheduledController): P
     if (deleted < DELETE_BATCH_SIZE) break;
   }
 
-  console.log(`retention: deleted=${totalDeleted} cutoff=${cutoff} days=${retentionDays}`);
+  let globalpingDeleted = 0;
+  for (let i = 0; i < MAX_BATCHES; i++) {
+    const r = await env.DB.prepare(
+      `
+        DELETE FROM globalping_history
+        WHERE rowid IN (
+          SELECT rowid
+          FROM globalping_history
+          WHERE checked_at < ?1
+          ORDER BY checked_at
+          LIMIT ?2
+        )
+      `,
+    )
+      .bind(cutoff, DELETE_BATCH_SIZE)
+      .run();
+
+    const deleted = r.meta.changes ?? 0;
+    globalpingDeleted += deleted;
+    if (deleted < DELETE_BATCH_SIZE) break;
+  }
+
+  console.log(
+    `retention: check_results_deleted=${totalDeleted} globalping_deleted=${globalpingDeleted} cutoff=${cutoff} days=${retentionDays}`,
+  );
 }
