@@ -6,6 +6,9 @@ vi.mock('../src/monitor/http', () => ({
 vi.mock('../src/monitor/tcp', () => ({
   runTcpCheck: vi.fn(),
 }));
+vi.mock('../src/monitor/globalping', () => ({
+  runGlobalpingHttpCheck: vi.fn(),
+}));
 vi.mock('../src/scheduler/lock', () => ({
   acquireLease: vi.fn(),
   releaseLease: vi.fn(),
@@ -44,6 +47,7 @@ vi.mock('../src/snapshots', () => ({
 import type { Env } from '../src/env';
 import { runInternalHomepageRefreshCore } from '../src/internal/homepage-refresh-core';
 import { runHttpCheck } from '../src/monitor/http';
+import { runGlobalpingHttpCheck } from '../src/monitor/globalping';
 import { runTcpCheck } from '../src/monitor/tcp';
 import { dispatchWebhookToChannels } from '../src/notify/webhook';
 import { computePublicHomepagePayload } from '../src/public/homepage';
@@ -107,6 +111,10 @@ function createEnv(options: CreateEnvOptions = {}): Env {
       match: (normalizedSql) =>
         normalizedSql.includes('select 1 as present') && normalizedSql.includes('from monitors m'),
       first: () => (readSchedulableMonitorPresent() ? { present: 1 } : null),
+    },
+    {
+      match: 'from monitor_extensions e join monitors m',
+      all: () => [],
     },
     {
       match: 'from monitors m',
@@ -237,6 +245,23 @@ describe('scheduler/scheduled regression', () => {
       error: null,
       attempts: 1,
     });
+    vi.mocked(runGlobalpingHttpCheck).mockResolvedValue({
+      status: 'up',
+      latencyMs: 42,
+      httpStatus: 200,
+      error: null,
+      attempts: 1,
+      location: 'globalping',
+      regionResults: [
+        {
+          location: 'Tokyo, JP',
+          status: 'up',
+          latencyMs: 42,
+          httpStatus: 200,
+          error: null,
+        },
+      ],
+    });
     vi.mocked(runTcpCheck).mockResolvedValue({
       status: 'up',
       latencyMs: 12,
@@ -329,6 +354,54 @@ describe('scheduler/scheduled regression', () => {
       }),
     ]);
     await expect(listMonitorRowsByIds(env.DB, [0, -1])).resolves.toEqual([]);
+  });
+
+  it('runs Globalping HTTP checks through the scheduler when configured', async () => {
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 9,
+          name: 'Global API',
+          type: 'http',
+          target: 'https://example.com/health',
+          interval_sec: 60,
+          created_at: 1_760_000_000,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo', 'Singapore']),
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: 1_760_000_060,
+          last_changed_at: 1_760_000_000,
+          consecutive_failures: 0,
+          consecutive_successes: 1,
+        },
+      ],
+    }) as unknown as Env;
+    env.GLOBALPING_API_TOKEN = 'test-globalping-token';
+    const waitUntil = vi.fn();
+
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    expect(runGlobalpingHttpCheck).toHaveBeenCalledTimes(1);
+    expect(runGlobalpingHttpCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://example.com/health',
+        locations: ['Tokyo', 'Singapore'],
+        apiToken: 'test-globalping-token',
+      }),
+    );
+    expect(runHttpCheck).not.toHaveBeenCalled();
   });
 
   it('queues homepage refresh when monitors are runnable but none are due', async () => {
