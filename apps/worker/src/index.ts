@@ -932,6 +932,9 @@ async function handleInternalScheduledCheckBatch(
         abortSignal: request.signal,
         suppressedMonitorIds,
         trustSchedulerLease,
+        ...(env.GLOBALPING_API_TOKEN
+          ? { globalpingApiToken: env.GLOBALPING_API_TOKEN }
+          : {}),
         stateMachineConfig: {
           failuresToDownFromUp: parsedBody.state_failures_to_down_from_up,
           successesToUpFromDown: parsedBody.state_successes_to_up_from_down,
