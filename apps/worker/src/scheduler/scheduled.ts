@@ -1191,6 +1191,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
     successesToUpFromDown: number;
   };
   onPersistedMonitor?: (completed: CompletedDueMonitor) => void;
+  globalpingApiToken?: string | undefined;
   trace?: Trace;
   trustSchedulerLease?: boolean;
 }): Promise<MonitorBatchExecutionResult> {
@@ -1219,6 +1220,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
       stateMachineConfig: opts.stateMachineConfig,
       ...(opts.suppressedMonitorIds ? { suppressedMonitorIds: opts.suppressedMonitorIds } : {}),
       ...(opts.onPersistedMonitor ? { onPersistedMonitor: opts.onPersistedMonitor } : {}),
+      ...(opts.globalpingApiToken ? { globalpingApiToken: opts.globalpingApiToken } : {}),
       ...(opts.trace ? { trace: opts.trace } : {}),
       beforePersist: () => {
         if (opts.abortSignal?.aborted) {
@@ -1290,6 +1292,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
       stateMachineConfig: opts.stateMachineConfig,
       ...(opts.suppressedMonitorIds ? { suppressedMonitorIds: opts.suppressedMonitorIds } : {}),
       ...(opts.onPersistedMonitor ? { onPersistedMonitor: opts.onPersistedMonitor } : {}),
+      ...(opts.globalpingApiToken ? { globalpingApiToken: opts.globalpingApiToken } : {}),
       ...(opts.trace ? { trace: opts.trace } : {}),
       beforePersist: () => {
         if (opts.abortSignal?.aborted) {
@@ -1548,6 +1551,7 @@ async function runDueMonitor(
   checkedAt: number,
   maintenanceSuppressed: boolean,
   stateMachineConfig: { failuresToDownFromUp: number; successesToUpFromDown: number },
+  globalpingApiToken?: string,
 ): Promise<CompletedDueMonitor> {
   const prevStatus = toMonitorStatus(row.state_status);
   const prev: MonitorStateSnapshot | null =
@@ -1636,6 +1640,7 @@ async function runDueMonitor(
             responseForbiddenKeyword: row.response_forbidden_keyword,
             responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
             locations,
+            apiToken: globalpingApiToken ?? null,
           });
         } else {
           const { runHttpCheck } = await getHttpCheckModule();
@@ -1744,6 +1749,7 @@ export async function runPersistedMonitorBatch(opts: {
     successesToUpFromDown: number;
   };
   onPersistedMonitor?: (completed: CompletedDueMonitor) => void;
+  globalpingApiToken?: string | undefined;
   beforePersist?: () => void | Promise<void>;
   trace?: Trace;
 }): Promise<MonitorBatchExecutionResult> {
@@ -1760,6 +1766,7 @@ export async function runPersistedMonitorBatch(opts: {
             opts.checkedAt,
             suppressedMonitorIds.has(row.id),
             opts.stateMachineConfig,
+            opts.globalpingApiToken,
           ),
         ),
       ),
@@ -2104,6 +2111,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
                 abortSignal: schedulerLease.signal,
                 suppressedMonitorIds: new Set(suppressedIds),
                 stateMachineConfig,
+                ...(env.GLOBALPING_API_TOKEN
+                  ? { globalpingApiToken: env.GLOBALPING_API_TOKEN }
+                  : {}),
                 ...(inlineNotificationHandler
                   ? { onPersistedMonitor: inlineNotificationHandler }
                   : {}),
@@ -2148,6 +2158,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
         checkedAt,
         suppressedMonitorIds,
         stateMachineConfig,
+        ...(env.GLOBALPING_API_TOKEN
+          ? { globalpingApiToken: env.GLOBALPING_API_TOKEN }
+          : {}),
         ...(inlineNotificationHandler ? { onPersistedMonitor: inlineNotificationHandler } : {}),
         beforePersist: () => {
           schedulerLease.assertHeld('persisting inline scheduled batch');
