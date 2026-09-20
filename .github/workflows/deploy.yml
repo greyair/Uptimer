@@ -399,7 +399,9 @@ jobs:
 
       - name: Build Pages (Vite)
         working-directory: apps/web
-        run: pnpm build
+        run: |
+          pnpm build
+          printf '{"commit":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json
 
       - name: Ensure Pages project exists (idempotent)
         shell: bash
@@ -453,3 +455,18 @@ jobs:
             --commit-hash "$GITHUB_SHA" \
             --commit-message "$GITHUB_SHA" \
             --commit-dirty=true
+
+      - name: Verify deployed frontend and Globalping status
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Production frontend: https://$PAGES_PROJECT.pages.dev"
+          echo "Expected commit: $GITHUB_SHA"
+          echo "build-info.json:"
+          curl -fsS --retry 6 --retry-delay 2 "https://$PAGES_PROJECT.pages.dev/build-info.json" || true
+          echo
+          if [[ -n "${UPTIMER_RESOLVED_API_ORIGIN:-}" ]]; then
+            echo "Globalping status:"
+            curl -fsS --retry 3 --retry-delay 2 "$UPTIMER_RESOLVED_API_ORIGIN/api/v1/public/globalping-status" || true
+            echo
+          fi
