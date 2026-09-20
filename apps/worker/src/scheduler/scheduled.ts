@@ -1941,7 +1941,7 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
 
     try {
       const { runDueAuxiliaryChecks } = await import('../monitor/auxiliary');
-      expiryAlerts = await runDueAuxiliaryChecks(env.DB, now);
+      expiryAlerts = await runDueAuxiliaryChecks(env.DB, now, env.GLOBALPING_API_TOKEN);
     } catch (err) {
       console.warn('scheduled auxiliary checks failed', err);
     }
