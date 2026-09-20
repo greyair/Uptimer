@@ -4,4 +4,5 @@ export type CheckOutcome = {
   error: string | null;
   httpStatus: number | null;
   attempts: number;
+  location?: string | null;
 };
