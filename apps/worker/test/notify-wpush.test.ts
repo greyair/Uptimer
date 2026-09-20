@@ -78,6 +78,37 @@ describe('notify/webhook WPush preset', () => {
     expect(finalizeArgs).toEqual(['success', 200, null, 'monitor:1:down:100', 20]);
   });
 
+  it('skips monitor events outside the configured monitor scope', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await dispatchWebhookToChannel({
+      db: notificationDb(() => {
+        throw new Error('delivery should not be finalized');
+      }),
+      env: { UPTIMER_WPUSH_API_KEY: 'WPUSH_TEST' },
+      channel: {
+        id: 25,
+        name: 'Scoped WPush',
+        config: {
+          preset: 'wpush',
+          api_key_secret_ref: 'UPTIMER_WPUSH_API_KEY',
+          channel: 'wechat',
+          monitor_ids: [2, 3],
+        },
+      },
+      eventType: 'monitor.down',
+      eventKey: 'monitor:1:down:100',
+      payload: {
+        event: 'monitor.down',
+        monitor: { id: 1, name: 'API' },
+      },
+    });
+
+    expect(result).toBe('skipped');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('uses a Worker Secret reference and reports API-level failures', async () => {
     let finalizeArgs: unknown[] | null = null;
 
