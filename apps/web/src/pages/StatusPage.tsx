@@ -7,6 +7,7 @@ import { useApplyServerLocaleSetting } from '../app/useApplyServerLocaleSetting'
 import {
   fetchLatency,
   fetchHomepage,
+  fetchPublicGlobalpingStatus,
   fetchPublicDayContext,
   fetchPublicIncidentDetail,
   fetchPublicMonitorOutages,
@@ -383,6 +384,24 @@ export function StatusPage() {
     },
   });
 
+  const globalpingStatusQuery = useQuery({
+    queryKey: ['public-globalping-status'],
+    queryFn: fetchPublicGlobalpingStatus,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+
+  const globalpingRegionsByMonitor = useMemo(
+    () =>
+      new Map(
+        (globalpingStatusQuery.data?.monitors ?? []).map((item) => [
+          item.monitor_id,
+          item.regions,
+        ] as const),
+      ),
+    [globalpingStatusQuery.data?.monitors],
+  );
+
   const derivedTitle = homepageQuery.data?.site_title || 'Uptimer';
   const derivedTimeZone = getBrowserTimeZone() || homepageQuery.data?.site_timezone || 'UTC';
 
@@ -688,6 +707,7 @@ export function StatusPage() {
                       onDayClick={(dayStartAt) =>
                         setSelectedDay({ monitorId: monitor.id, dayStartAt })
                       }
+                      regionStatuses={globalpingRegionsByMonitor.get(monitor.id)}
                     />
                   ))}
                 </div>
