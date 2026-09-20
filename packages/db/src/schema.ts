@@ -71,6 +71,8 @@ export const monitorExtensions = sqliteTable(
     monitorId: integer('monitor_id').primaryKey(),
     probeMode: text('probe_mode').$type<ProbeMode>().notNull().default('direct'),
     globalpingLocationsJson: text('globalping_locations_json'),
+    globalpingLastResultsJson: text('globalping_last_results_json'),
+    globalpingLastCheckedAt: integer('globalping_last_checked_at'),
 
     sslCheckEnabled: integer('ssl_check_enabled', { mode: 'boolean' }).notNull().default(false),
     sslWarnDays: integer('ssl_warn_days').notNull().default(30),
