@@ -33,6 +33,14 @@ import {
 } from '../public/homepage-guard-state';
 import { refreshPublicHomepageSnapshotIfNeeded } from '../snapshots';
 import { runHttpCheck } from '../monitor/http';
+import { runGlobalpingHttpCheck } from '../monitor/globalping';
+import {
+  deleteMonitorExtension,
+  getMonitorExtension,
+  listMonitorExtensions,
+  upsertMonitorExtension,
+  type MonitorExtensionConfig,
+} from '../monitor/extensions';
 import {
   validateHttpResponseAssertionConfig,
   type HttpResponseMatchMode,
@@ -260,6 +268,7 @@ function buildGroupReorderUpdate(
 function monitorRowToApi(
   row: typeof monitors.$inferSelect,
   state?: typeof monitorState.$inferSelect | null,
+  extension?: MonitorExtensionConfig,
 ) {
   const groupName = normalizeMonitorGroupName(row.groupName);
 
@@ -295,6 +304,19 @@ function monitorRowToApi(
     created_at: row.createdAt,
     updated_at: row.updatedAt,
 
+    probe_mode: extension?.probeMode ?? 'direct',
+    globalping_locations: extension?.globalpingLocations ?? [],
+    ssl_check_enabled: extension?.sslCheckEnabled ?? false,
+    ssl_warn_days: extension?.sslWarnDays ?? 30,
+    ssl_last_checked_at: extension?.sslLastCheckedAt ?? null,
+    ssl_expires_at: extension?.sslExpiresAt ?? null,
+    ssl_error: extension?.sslError ?? null,
+    domain_name: extension?.domainName ?? null,
+    domain_warn_days: extension?.domainWarnDays ?? 30,
+    domain_last_checked_at: extension?.domainLastCheckedAt ?? null,
+    domain_expires_at: extension?.domainExpiresAt ?? null,
+    domain_error: extension?.domainError ?? null,
+
     // Runtime state (denormalized from monitor_state for admin list).
     status: state?.status ?? 'unknown',
     last_checked_at: state?.lastCheckedAt ?? null,
@@ -327,7 +349,16 @@ adminRoutes.get('/monitors', async (c) => {
     .limit(limit)
     .all();
 
-  return c.json({ monitors: rows.map((r) => monitorRowToApi(r.monitor, r.state)) });
+  const extensions = await listMonitorExtensions(
+    c.env.DB,
+    rows.map((row) => row.monitor.id),
+  );
+
+  return c.json({
+    monitors: rows.map((r) =>
+      monitorRowToApi(r.monitor, r.state, extensions.get(r.monitor.id)),
+    ),
+  });
 });
 
 adminRoutes.post('/monitors/groups/reorder', async (c) => {
@@ -505,10 +536,26 @@ adminRoutes.post('/monitors', async (c) => {
     await syncGroupSortOrder(c.env.DB, groupName, groupSortOrder, now, inserted.id);
   }
 
+  const extension = await upsertMonitorExtension(
+    c.env.DB,
+    inserted.id,
+    {
+      probeMode: input.probe_mode,
+      ...(input.globalping_locations !== undefined
+        ? { globalpingLocations: input.globalping_locations }
+        : {}),
+      sslCheckEnabled: input.ssl_check_enabled,
+      sslWarnDays: input.ssl_warn_days,
+      domainName: input.domain_name,
+      domainWarnDays: input.domain_warn_days,
+    },
+    now,
+  );
+
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(inserted, null) }, 201);
+  return c.json({ monitor: monitorRowToApi(inserted, null, extension) }, 201);
 });
 
 adminRoutes.patch('/monitors/:id', async (c) => {
@@ -524,6 +571,44 @@ adminRoutes.patch('/monitors/:id', async (c) => {
 
   if (!existing) {
     throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
+  }
+
+  const existingExtension = await getMonitorExtension(c.env.DB, id);
+  const nextProbeMode = input.probe_mode ?? existingExtension.probeMode;
+  const nextGlobalpingLocations =
+    input.globalping_locations !== undefined
+      ? (input.globalping_locations ?? [])
+      : existingExtension.globalpingLocations;
+  const nextSslCheckEnabled = input.ssl_check_enabled ?? existingExtension.sslCheckEnabled;
+  const nextTarget = input.target ?? existing.target;
+
+  if (existing.type !== 'http' && nextProbeMode === 'globalping') {
+    throw new AppError(
+      400,
+      'INVALID_ARGUMENT',
+      'globalping probe mode is currently supported only for http monitors',
+    );
+  }
+  if (nextProbeMode === 'globalping' && nextGlobalpingLocations.length === 0) {
+    throw new AppError(
+      400,
+      'INVALID_ARGUMENT',
+      'globalping_locations is required when probe_mode is globalping',
+    );
+  }
+  if (nextSslCheckEnabled) {
+    try {
+      if (existing.type !== 'http' || new URL(nextTarget).protocol !== 'https:') {
+        throw new AppError(
+          400,
+          'INVALID_ARGUMENT',
+          'SSL certificate checks require an https monitor target',
+        );
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError(400, 'INVALID_ARGUMENT', 'SSL certificate checks require an https target');
+    }
   }
 
   // Validate target if being updated
@@ -648,10 +733,26 @@ adminRoutes.patch('/monitors/:id', async (c) => {
     await syncGroupSortOrder(c.env.DB, nextGroupName, nextGroupSortOrder, now, updated.id);
   }
 
+  const extension = await upsertMonitorExtension(
+    c.env.DB,
+    updated.id,
+    {
+      probeMode: input.probe_mode,
+      ...(input.globalping_locations !== undefined
+        ? { globalpingLocations: input.globalping_locations ?? [] }
+        : {}),
+      sslCheckEnabled: input.ssl_check_enabled,
+      sslWarnDays: input.ssl_warn_days,
+      domainName: input.domain_name,
+      domainWarnDays: input.domain_warn_days,
+    },
+    now,
+  );
+
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(updated, null) });
+  return c.json({ monitor: monitorRowToApi(updated, null, extension) });
 });
 
 adminRoutes.delete('/monitors/:id', async (c) => {
@@ -674,6 +775,7 @@ adminRoutes.delete('/monitors/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM monitor_daily_rollups WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM maintenance_window_monitors WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM incident_monitors WHERE monitor_id = ?1').bind(id),
+    c.env.DB.prepare('DELETE FROM monitor_extensions WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM monitors WHERE id = ?1').bind(id),
   ]);
 
@@ -693,9 +795,11 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
     throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
   }
 
+  const extension = await getMonitorExtension(c.env.DB, monitor.id);
   let outcome;
+  let regionResults: unknown[] | undefined;
   if (monitor.type === 'http') {
-    outcome = await runHttpCheck({
+    const httpConfig = {
       url: monitor.target,
       timeoutMs: monitor.timeoutMs,
       method: (monitor.httpMethod as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD') ?? 'GET',
@@ -714,7 +818,20 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
       responseKeywordMode: monitor.responseKeywordMode,
       responseForbiddenKeyword: monitor.responseForbiddenKeyword,
       responseForbiddenKeywordMode: monitor.responseForbiddenKeywordMode,
-    });
+    };
+
+    if (extension.probeMode === 'globalping') {
+      const globalpingResult = await runGlobalpingHttpCheck({
+        ...httpConfig,
+        body: monitor.httpBody,
+        locations: extension.globalpingLocations,
+        apiToken: c.env.GLOBALPING_API_TOKEN ?? null,
+      });
+      outcome = globalpingResult;
+      regionResults = globalpingResult.regionResults;
+    } else {
+      outcome = await runHttpCheck(httpConfig);
+    }
   } else {
     outcome = await runTcpCheck({
       target: monitor.target,
@@ -730,6 +847,8 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
       http_status: outcome.httpStatus,
       error: outcome.error,
       attempts: outcome.attempts,
+      location: outcome.location ?? null,
+      ...(regionResults ? { region_results: regionResults } : {}),
     },
   });
 });
