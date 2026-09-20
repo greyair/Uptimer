@@ -49,7 +49,6 @@ import { validateHttpTarget, validateTcpTarget } from '../monitor/targets';
 import { runTcpCheck } from '../monitor/tcp';
 import {
   dispatchWebhookToChannel,
-  dispatchWebhookToChannelLegacy,
   dispatchWebhookToChannels,
   type WebhookChannel,
 } from '../notify/webhook';
