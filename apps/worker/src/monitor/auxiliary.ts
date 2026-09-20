@@ -41,6 +41,7 @@ async function updateSsl(
   db: D1Database,
   row: AuxiliaryRow,
   now: number,
+  globalpingApiToken?: string,
 ): Promise<ExpiryAlert | null> {
   if (!isEnabled(row.ssl_check_enabled)) return null;
   if (row.ssl_last_checked_at !== null && row.ssl_last_checked_at > now - SSL_REFRESH_SECONDS) return null;
@@ -75,7 +76,7 @@ async function updateSsl(
   }
 
   const port = url.port ? Number(url.port) : 443;
-  const result = await checkSslCertificate(url.hostname, port);
+  const result = await checkSslCertificate(url.hostname, port, 10_000, globalpingApiToken ?? null);
   await db
     .prepare(
       `UPDATE monitor_extensions
@@ -151,6 +152,7 @@ async function updateDomain(
 export async function runDueAuxiliaryChecks(
   db: D1Database,
   now: number,
+  globalpingApiToken?: string,
 ): Promise<ExpiryAlert[]> {
   const { results } = await db
     .prepare(
@@ -185,7 +187,12 @@ export async function runDueAuxiliaryChecks(
   const limit = pLimit(AUXILIARY_CONCURRENCY);
   const settled = await Promise.all(
     (results ?? []).map((row) =>
-      limit(async () => await Promise.all([updateSsl(db, row, now), updateDomain(db, row, now)])),
+      limit(async () =>
+        await Promise.all([
+          updateSsl(db, row, now, globalpingApiToken),
+          updateDomain(db, row, now),
+        ]),
+      ),
     ),
   );
 
