@@ -1731,6 +1731,24 @@ async function persistCompletedMonitors(
 
     for (const monitor of chunk) {
       statements.push(...buildOutageStatements(monitor, templates));
+
+      if (monitor.outcome.location === 'globalping') {
+        statements.push(
+          db
+            .prepare(
+              `UPDATE monitor_extensions
+               SET globalping_last_results_json = ?1,
+                   globalping_last_checked_at = ?2,
+                   updated_at = ?2
+               WHERE monitor_id = ?3`,
+            )
+            .bind(
+              JSON.stringify(monitor.outcome.regionResults ?? []),
+              monitor.checkedAt,
+              monitor.row.id,
+            ),
+        );
+      }
     }
 
     if (statements.length > 0) {
