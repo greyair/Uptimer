@@ -18,6 +18,7 @@ import type {
   IncidentUpdate,
   NotificationChannel,
   NotificationChannelTestResult,
+  NotificationChannelTestEventType,
   PatchMaintenanceWindowInput,
   PatchMonitorInput,
   PatchNotificationChannelInput,
@@ -528,10 +529,14 @@ export async function updateNotificationChannel(
   return handleResponse<{ notification_channel: NotificationChannel }>(res);
 }
 
-export async function testNotificationChannel(id: number): Promise<NotificationChannelTestResult> {
+export async function testNotificationChannel(
+  id: number,
+  input: { event_type?: NotificationChannelTestEventType; monitor_id?: number } = {},
+): Promise<NotificationChannelTestResult> {
   const res = await fetch(`${API_BASE}/admin/notification-channels/${id}/test`, {
     method: 'POST',
-    headers: getAuthHeaders(),
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(input),
   });
   return handleResponse<NotificationChannelTestResult>(res);
 }
