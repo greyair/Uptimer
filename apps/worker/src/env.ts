@@ -2,6 +2,7 @@ export interface Env {
   DB: D1Database;
   ADMIN_TOKEN: string;
   GLOBALPING_API_TOKEN?: string;
+  MCP_TOKEN?: string;
 
   // Optional internal service binding to self (configured by CI deploy).
   SELF?: Fetcher;
