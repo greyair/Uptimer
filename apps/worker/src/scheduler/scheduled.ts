@@ -1864,19 +1864,6 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   const claimedLeaseExpiresAt = now + LOCK_LEASE_SECONDS;
   const totalStart = performance.now();
   const currentNow = () => Math.floor(Date.now() / 1000);
-  ctx.waitUntil(
-    Promise.all([import('../monitor/auxiliary'), import('./notifications')])
-      .then(async ([{ runDueAuxiliaryChecks }, notificationsModule]) => {
-        const alerts = await runDueAuxiliaryChecks(env.DB, now);
-        if (alerts.length === 0) return;
-
-        const notify = await notificationsModule.createNotifyContext(env, ctx);
-        if (!notify) return;
-
-        await notificationsModule.emitExpiryNotifications(env, notify, alerts, now);
-      })
-      .catch((err) => console.warn('scheduled auxiliary checks failed', err)),
-  );
   const queueShardedPublicSnapshotWork = () =>
     runScheduledShardedPublicSnapshotWork(env).catch((err) => {
       console.warn('scheduled sharded public snapshot work failed', err);
@@ -1948,6 +1935,17 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   };
 
   const initializeNotifications = async (): Promise<InitializedNotifications> => {
+    let expiryAlerts: Awaited<
+      ReturnType<typeof import('../monitor/auxiliary')['runDueAuxiliaryChecks']>
+    > = [];
+
+    try {
+      const { runDueAuxiliaryChecks } = await import('../monitor/auxiliary');
+      expiryAlerts = await runDueAuxiliaryChecks(env.DB, now);
+    } catch (err) {
+      console.warn('scheduled auxiliary checks failed', err);
+    }
+
     const hasWebhookNotifications = await hasActiveWebhookChannels(env.DB);
     if (!hasWebhookNotifications) {
       return { module: null, notify: null };
@@ -1957,6 +1955,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
     const notify = await notificationsModule.createNotifyContext(env, ctx);
     if (notify) {
       await notificationsModule.emitMaintenanceWindowNotifications(env, notify, now);
+      if (expiryAlerts.length > 0) {
+        await notificationsModule.emitExpiryNotifications(env, notify, expiryAlerts, now);
+      }
     }
     return { module: notificationsModule, notify };
   };
