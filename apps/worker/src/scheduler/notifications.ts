@@ -2,6 +2,7 @@ import { parseDbJson, webhookChannelConfigSchema } from '@uptimer/db/json';
 import type { MonitorStatus } from '@uptimer/db/schema';
 
 import type { Env } from '../env';
+import type { ExpiryAlert } from '../monitor/auxiliary';
 import type { NextState } from '../monitor/state-machine';
 import type { CheckOutcome } from '../monitor/types';
 import type { WebhookChannel } from '../notify/webhook';
@@ -316,6 +317,51 @@ export async function emitMaintenanceWindowNotifications(
   }
 }
 
+export async function emitExpiryNotifications(
+  env: Env,
+  notify: NotifyContext,
+  alerts: readonly ExpiryAlert[],
+  now: number,
+): Promise<void> {
+  if (alerts.length === 0 || notify.channels.length === 0) return;
+
+  const { dispatchWebhookToChannels } = await getWebhookDispatchModule();
+
+  for (const alert of alerts) {
+    const eventType =
+      alert.kind === 'ssl' ? 'monitor.ssl.expiring' : 'monitor.domain.expiring';
+    const eventKey =
+      `monitor:${alert.monitorId}:${alert.kind}-expiring:${alert.expiresAt}:${alert.warnDays}`;
+    const payload = {
+      event: eventType,
+      event_id: eventKey,
+      timestamp: now,
+      monitor: {
+        id: alert.monitorId,
+        name: alert.monitorName,
+        target: alert.target,
+        display_url: alert.displayUrl,
+      },
+      expiry: {
+        kind: alert.kind,
+        subject: alert.subject,
+        expires_at: alert.expiresAt,
+        warn_days: alert.warnDays,
+        days_remaining: alert.daysRemaining,
+      },
+    };
+
+    await dispatchWebhookToChannels({
+      db: env.DB,
+      env: notify.envRecord,
+      channels: notify.channels,
+      eventType,
+      eventKey,
+      payload,
+    });
+  }
+}
+
 export function queueMonitorNotification(
   env: Env,
   notify: NotifyContext | null,
@@ -359,7 +405,7 @@ export function queueMonitorNotification(
       latency_ms: outcome.latencyMs,
       http_status: outcome.httpStatus,
       error: outcome.error,
-      location: null,
+      location: outcome.location ?? null,
     },
   };
 
