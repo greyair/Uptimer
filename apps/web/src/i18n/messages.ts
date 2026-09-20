@@ -243,6 +243,14 @@ const en = {
   'admin_dashboard.webhook_test_unknown': 'unknown',
   'admin_dashboard.webhook_test_status_success': 'success',
   'admin_dashboard.webhook_test_status_failed': 'failed',
+  'admin_dashboard.webhook_test_status_skipped': 'skipped',
+  'admin_dashboard.webhook_test_event': 'Simulated event',
+  'admin_dashboard.webhook_test_monitor': 'Monitor',
+  'admin_dashboard.webhook_test_monitor_none': 'Select a monitor',
+  'admin_dashboard.webhook_test_scope_help':
+    'Use a monitor event to verify whether this channel scope allows or skips that monitor.',
+  'admin_dashboard.webhook_test_skipped_scope':
+    'Skipped by the channel monitor scope.',
   'admin_dashboard.webhook_delivery_success': 'Delivery recorded successfully',
   'admin_dashboard.webhook_delivery_missing': 'No delivery row returned by API',
   'admin_dashboard.document_title_suffix': 'Admin',
