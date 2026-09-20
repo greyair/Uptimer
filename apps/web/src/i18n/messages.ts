@@ -401,8 +401,6 @@ const en = {
   'notification_form.preset_custom': 'Custom webhook',
   'notification_form.preset_telegram': 'Telegram',
   'notification_form.preset_wpush': 'WPush',
-  'notification_form.preset_wpush': 'WPush',
-  'notification_form.preset_wpush': 'WPush',
   'notification_form.preset_custom_help': 'Send the configured webhook request directly.',
   'notification_form.preset_telegram_help':
     'Send Telegram Bot API messages with a BotFather token and chat ID.',
@@ -891,6 +889,7 @@ const zhCn: LocaleMessages = {
   'notification_form.preset': '预设',
   'notification_form.preset_custom': '自定义 Webhook',
   'notification_form.preset_telegram': 'Telegram',
+  'notification_form.preset_wpush': 'WPush',
   'notification_form.preset_custom_help': '按下方配置直接发送 Webhook 请求。',
   'notification_form.preset_telegram_help':
     '填写 BotFather Token 和 Chat ID 后，通过 Telegram Bot API 发送消息。',
@@ -1376,6 +1375,7 @@ const zhTw: LocaleMessages = {
   'notification_form.preset': '預設',
   'notification_form.preset_custom': '自訂 Webhook',
   'notification_form.preset_telegram': 'Telegram',
+  'notification_form.preset_wpush': 'WPush',
   'notification_form.preset_custom_help': '依下方設定直接發送 Webhook 請求。',
   'notification_form.preset_telegram_help':
     '填寫 BotFather Token 與 Chat ID 後，透過 Telegram Bot API 發送訊息。',
