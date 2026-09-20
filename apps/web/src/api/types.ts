@@ -591,6 +591,25 @@ export interface NotificationChannelTestResult {
   } | null;
 }
 
+export interface PublicGlobalpingRegionStatus {
+  location: string;
+  status: 'up' | 'down' | 'unknown';
+  latency_ms: number | null;
+  http_status: number | null;
+  error: string | null;
+}
+
+export interface PublicGlobalpingMonitorStatus {
+  monitor_id: number;
+  checked_at: number | null;
+  regions: PublicGlobalpingRegionStatus[];
+}
+
+export interface PublicGlobalpingStatusResponse {
+  generated_at: number;
+  monitors: PublicGlobalpingMonitorStatus[];
+}
+
 export interface PublicIncidentsResponse {
   incidents: Incident[];
   next_cursor: number | null;
