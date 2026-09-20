@@ -17,12 +17,12 @@ export type MonitorExtensionConfig = {
 };
 
 export type MonitorExtensionInput = {
-  probeMode?: ProbeMode;
-  globalpingLocations?: string[];
-  sslCheckEnabled?: boolean;
-  sslWarnDays?: number;
-  domainName?: string | null;
-  domainWarnDays?: number;
+  probeMode?: ProbeMode | undefined;
+  globalpingLocations?: string[] | undefined;
+  sslCheckEnabled?: boolean | undefined;
+  sslWarnDays?: number | undefined;
+  domainName?: string | null | undefined;
+  domainWarnDays?: number | undefined;
 };
 
 const DEFAULT_EXTENSION = {
