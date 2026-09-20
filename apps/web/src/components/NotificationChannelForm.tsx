@@ -447,8 +447,8 @@ export function NotificationChannelForm({
 
       <div>
         <label className={labelClass}>{t('notification_form.preset')}</label>
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800/60">
-          {(['custom', 'telegram'] as const).map((item) => {
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800/60">
+          {(['custom', 'telegram', 'wpush'] as const).map((item) => {
             const active = preset === item;
             return (
               <button
@@ -464,7 +464,9 @@ export function NotificationChannelForm({
               >
                 {item === 'telegram'
                   ? t('notification_form.preset_telegram')
-                  : t('notification_form.preset_custom')}
+                  : item === 'wpush'
+                    ? t('notification_form.preset_wpush')
+                    : t('notification_form.preset_custom')}
               </button>
             );
           })}
@@ -472,7 +474,9 @@ export function NotificationChannelForm({
         <div className={FIELD_HELP_CLASS}>
           {preset === 'telegram'
             ? t('notification_form.preset_telegram_help')
-            : t('notification_form.preset_custom_help')}
+            : preset === 'wpush'
+              ? t('notification_form.preset_wpush_help')
+              : t('notification_form.preset_custom_help')}
         </div>
       </div>
 
@@ -539,7 +543,7 @@ export function NotificationChannelForm({
             <div className={FIELD_HELP_CLASS}>{t('notification_form.headers_help')}</div>
           </div>
         </>
-      ) : (
+      ) : preset === 'telegram' ? (
         <>
           {!telegramUsesSecretRef && (
             <div>
@@ -717,6 +721,155 @@ export function NotificationChannelForm({
                   />
                   <span>{t('notification_form.telegram_protect_content')}</span>
                 </label>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {!wpushUsesSecretRef && (
+            <div>
+              <label className={labelClass}>{t('notification_form.wpush_api_key')}</label>
+              <input
+                type="password"
+                value={wpushApiKey}
+                onChange={(e) => setWpushApiKey(e.target.value)}
+                className={inputClass}
+                placeholder="WPUSH_..."
+                required={!channel || !wpushHasStoredKey}
+              />
+              <div className={FIELD_HELP_CLASS}>
+                {channel && wpushHasStoredKey
+                  ? t('notification_form.wpush_api_key_keep_help')
+                  : t('notification_form.wpush_api_key_help')}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className={labelClass}>{t('notification_form.wpush_channel')}</label>
+            <input
+              type="text"
+              value={wpushChannel}
+              onChange={(e) => setWpushChannel(e.target.value)}
+              className={inputClass}
+              placeholder="wechat"
+              required
+            />
+            <div className={FIELD_HELP_CLASS}>{t('notification_form.wpush_channel_help')}</div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={showAdvancedWpush}
+              onChange={(e) => setShowAdvancedWpush(e.target.checked)}
+            />
+            <span>{t('notification_form.advanced_options')}</span>
+          </label>
+
+          {showAdvancedWpush && (
+            <div className="space-y-4 border-t border-slate-200 dark:border-slate-700 pt-4">
+              <div>
+                <label className={labelClass}>{t('notification_form.wpush_key_source')}</label>
+                <select
+                  value={wpushTokenMode}
+                  onChange={(e) => setWpushTokenMode(e.target.value as WpushTokenMode)}
+                  className={selectClass}
+                >
+                  <option value="token">{t('notification_form.wpush_key_source_encrypted')}</option>
+                  <option value="secret_ref">{t('notification_form.wpush_key_source_secret')}</option>
+                </select>
+              </div>
+
+              {wpushUsesSecretRef && (
+                <div>
+                  <label className={labelClass}>{t('notification_form.wpush_api_key_secret_ref')}</label>
+                  <input
+                    type="text"
+                    value={wpushApiKeySecretRef}
+                    onChange={(e) => setWpushApiKeySecretRef(e.target.value)}
+                    className={inputClass}
+                    placeholder="UPTIMER_WPUSH_API_KEY"
+                    required
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className={labelClass}>{t('notification_form.wpush_option_optional')}</label>
+                <input
+                  type="text"
+                  value={wpushOption}
+                  onChange={(e) => setWpushOption(e.target.value)}
+                  className={inputClass}
+                  placeholder="default"
+                />
+                <div className={FIELD_HELP_CLASS}>{t('notification_form.wpush_option_help')}</div>
+              </div>
+
+              <div>
+                <label className={labelClass}>{t('notification_form.wpush_url_optional')}</label>
+                <input
+                  type="url"
+                  value={wpushUrl}
+                  onChange={(e) => setWpushUrl(e.target.value)}
+                  className={inputClass}
+                  placeholder="https://status.example.com"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>{t('notification_form.timeout_ms')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={60000}
+                  value={timeoutMs}
+                  onChange={(e) => setTimeoutMs(Number(e.target.value))}
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>{t('notification_form.wpush_title_template_optional')}</label>
+                <input
+                  type="text"
+                  value={wpushTitleTemplate}
+                  onChange={(e) => setWpushTitleTemplate(e.target.value)}
+                  className={inputClass}
+                  placeholder="Uptimer · {{event}}"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>{t('notification_form.message_template_optional')}</label>
+                <textarea
+                  value={messageTemplate}
+                  onChange={(e) => setMessageTemplate(e.target.value)}
+                  className={textareaClass}
+                  rows={3}
+                  placeholder={t('notification_form.message_template_placeholder')}
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>{t('notification_form.enabled_events_optional')}</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {allEvents.map((ev) => (
+                    <label
+                      key={ev}
+                      className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabledEvents.includes(ev)}
+                        onChange={() => toggleEnabledEvent(ev)}
+                      />
+                      <span>{ev}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
           )}
