@@ -220,6 +220,7 @@ function isPublicUiPath(url: URL): boolean {
   if (pathname === '/api/v1/public/status') return true;
   if (pathname === '/api/v1/public/incidents') return true;
   if (pathname === '/api/v1/public/maintenance-windows') return true;
+  if (pathname === '/api/v1/public/globalping-status') return true;
   if (pathname === '/api/v1/public/analytics/uptime') return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/day-context$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/outages$/.test(pathname)) return true;
