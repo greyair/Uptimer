@@ -9,6 +9,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 
 export type MonitorType = 'http' | 'tcp';
+export type ProbeMode = 'direct' | 'globalping';
 export type MonitorStatus = 'up' | 'down' | 'maintenance' | 'paused' | 'unknown';
 export type CheckStatus = 'up' | 'down' | 'maintenance' | 'unknown';
 export type HttpResponseMatchMode = 'contains' | 'regex';
@@ -61,6 +62,35 @@ export const monitors = sqliteTable(
       t.sortOrder,
       t.id,
     ),
+  }),
+);
+
+export const monitorExtensions = sqliteTable(
+  'monitor_extensions',
+  {
+    monitorId: integer('monitor_id').primaryKey(),
+    probeMode: text('probe_mode').$type<ProbeMode>().notNull().default('direct'),
+    globalpingLocationsJson: text('globalping_locations_json'),
+
+    sslCheckEnabled: integer('ssl_check_enabled', { mode: 'boolean' }).notNull().default(false),
+    sslWarnDays: integer('ssl_warn_days').notNull().default(30),
+    sslLastCheckedAt: integer('ssl_last_checked_at'),
+    sslExpiresAt: integer('ssl_expires_at'),
+    sslError: text('ssl_error'),
+
+    domainName: text('domain_name'),
+    domainWarnDays: integer('domain_warn_days').notNull().default(30),
+    domainLastCheckedAt: integer('domain_last_checked_at'),
+    domainExpiresAt: integer('domain_expires_at'),
+    domainError: text('domain_error'),
+
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`(CAST(strftime('%s','now') AS INTEGER))`),
+  },
+  (t) => ({
+    sslDueIdx: index('idx_monitor_extensions_ssl_due').on(t.sslCheckEnabled, t.sslLastCheckedAt),
+    domainDueIdx: index('idx_monitor_extensions_domain_due').on(t.domainName, t.domainLastCheckedAt),
   }),
 );
 
