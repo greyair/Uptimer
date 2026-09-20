@@ -225,6 +225,7 @@ function isPublicUiPath(url: URL): boolean {
   if (/^\/api\/v1\/public\/monitors\/\d+\/day-context$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/outages$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/uptime$/.test(pathname)) return true;
+  if (/^\/api\/v1\/public\/monitors\/\d+\/globalping-history$/.test(pathname)) return true;
   return /^\/api\/v1\/public\/monitors\/\d+\/latency$/.test(pathname) && url.searchParams.has('format');
 }
 
