@@ -1408,6 +1408,107 @@ publicUiRoutes.get('/monitors/:id/outages', async (c) => {
   );
 });
 
+publicUiRoutes.get('/monitors/:id/globalping-history', async (c) => {
+  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const id = z.coerce.number().int().positive().parse(c.req.param('id'));
+  const range = latencyRangeSchema.optional().default('24h').parse(c.req.query('range'));
+
+  const monitor = await c.env.DB
+    .prepare(
+      `
+        SELECT m.id, m.name
+        FROM monitors m
+        JOIN monitor_extensions e ON e.monitor_id = m.id
+        WHERE m.id = ?1
+          AND m.is_active = 1
+          AND m.type = 'http'
+          AND e.probe_mode = 'globalping'
+          AND ${monitorVisibilityPredicate(includeHiddenMonitors, 'm')}
+      `,
+    )
+    .bind(id)
+    .first<{ id: number; name: string }>();
+
+  if (!monitor) {
+    throw new AppError(404, 'NOT_FOUND', 'Globalping monitor not found');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const rangeEnd = Math.floor(now / 60) * 60;
+  const rangeStart = rangeEnd - 24 * 60 * 60;
+  const { results } = await c.env.DB.prepare(
+    `
+      SELECT checked_at, results_json
+      FROM globalping_history
+      WHERE monitor_id = ?1
+        AND checked_at >= ?2
+        AND checked_at <= ?3
+      ORDER BY checked_at ASC
+    `,
+  )
+    .bind(id, rangeStart, rangeEnd)
+    .all<{ checked_at: number; results_json: string }>();
+
+  const regions = new Map<
+    string,
+    Array<{
+      checked_at: number;
+      status: 'up' | 'down' | 'unknown';
+      latency_ms: number | null;
+      http_status: number | null;
+      error: string | null;
+    }>
+  >();
+
+  for (const row of results ?? []) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(row.results_json) as unknown;
+    } catch {
+      parsed = null;
+    }
+    if (!Array.isArray(parsed)) continue;
+
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const value = item as Record<string, unknown>;
+      const location = typeof value.location === 'string' ? value.location : 'Unknown';
+      const points = regions.get(location) ?? [];
+      points.push({
+        checked_at: row.checked_at,
+        status:
+          value.status === 'up' || value.status === 'down' || value.status === 'unknown'
+            ? value.status
+            : 'unknown',
+        latency_ms:
+          typeof value.latencyMs === 'number' && Number.isFinite(value.latencyMs)
+            ? Math.max(0, Math.round(value.latencyMs))
+            : null,
+        http_status:
+          typeof value.httpStatus === 'number' && Number.isFinite(value.httpStatus)
+            ? Math.round(value.httpStatus)
+            : null,
+        error: typeof value.error === 'string' ? value.error : null,
+      });
+      regions.set(location, points);
+    }
+  }
+
+  return withVisibilityAwareCaching(
+    c.json({
+      monitor,
+      range,
+      range_start_at: rangeStart,
+      range_end_at: rangeEnd,
+      regions: [...regions.entries()].map(([location, points]) => ({
+        location,
+        points,
+      })),
+    }),
+    includeHiddenMonitors,
+  );
+});
+
 publicUiRoutes.get('/monitors/:id/latency', async (c) => {
   const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
