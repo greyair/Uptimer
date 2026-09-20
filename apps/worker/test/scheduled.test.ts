@@ -153,6 +153,7 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     {
       match: 'insert into globalping_history',
       run: () => ({ meta: { changes: 1 } }),
+      all: () => [],
     },
     {
       match: 'insert into check_results',
