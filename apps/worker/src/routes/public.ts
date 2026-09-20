@@ -1281,6 +1281,72 @@ publicRoutes.get('/incidents', async (c) => {
   );
 });
 
+publicRoutes.get('/globalping-status', async (c) => {
+  const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
+  const { results } = await c.env.DB.prepare(
+    `
+      SELECT
+        m.id AS monitor_id,
+        e.globalping_last_checked_at,
+        e.globalping_last_results_json
+      FROM monitors m
+      JOIN monitor_extensions e ON e.monitor_id = m.id
+      WHERE m.is_active = 1
+        AND m.type = 'http'
+        AND e.probe_mode = 'globalping'
+        AND ${monitorVisibilityPredicate(includeHiddenMonitors, 'm')}
+      ORDER BY m.id ASC
+    `,
+  ).all<{
+    monitor_id: number;
+    globalping_last_checked_at: number | null;
+    globalping_last_results_json: string | null;
+  }>();
+
+  const monitors = (results ?? []).map((row) => {
+    const parsed = row.globalping_last_results_json
+      ? safeJsonParse(row.globalping_last_results_json)
+      : null;
+    const regions = Array.isArray(parsed)
+      ? parsed
+          .filter(
+            (item): item is Record<string, unknown> =>
+              item !== null && typeof item === 'object' && !Array.isArray(item),
+          )
+          .map((item) => ({
+            location: typeof item.location === 'string' ? item.location : 'Unknown',
+            status:
+              item.status === 'up' || item.status === 'down' || item.status === 'unknown'
+                ? item.status
+                : 'unknown',
+            latency_ms:
+              typeof item.latencyMs === 'number' && Number.isFinite(item.latencyMs)
+                ? Math.max(0, Math.round(item.latencyMs))
+                : null,
+            http_status:
+              typeof item.httpStatus === 'number' && Number.isFinite(item.httpStatus)
+                ? Math.round(item.httpStatus)
+                : null,
+            error: typeof item.error === 'string' ? item.error : null,
+          }))
+      : [];
+
+    return {
+      monitor_id: row.monitor_id,
+      checked_at: row.globalping_last_checked_at,
+      regions,
+    };
+  });
+
+  return withVisibilityAwareCaching(
+    c.json({
+      generated_at: Math.floor(Date.now() / 1000),
+      monitors,
+    }),
+    includeHiddenMonitors,
+  );
+});
+
 publicRoutes.get('/maintenance-windows', async (c) => {
   const includeHiddenMonitors = isAuthorizedStatusAdminRequest(c);
   const limit = z.coerce
