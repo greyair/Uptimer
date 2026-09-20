@@ -493,7 +493,7 @@ export interface MonitorTestResult {
   };
 }
 
-export type NotificationChannelPreset = 'custom' | 'telegram';
+export type NotificationChannelPreset = 'custom' | 'telegram' | 'wpush';
 export type TelegramParseMode = 'Markdown' | 'MarkdownV2' | 'HTML';
 
 export interface CustomWebhookChannelConfig {
@@ -513,6 +513,8 @@ export interface CustomWebhookChannelConfig {
     | 'incident.resolved'
     | 'maintenance.started'
     | 'maintenance.ended'
+    | 'monitor.ssl.expiring'
+    | 'monitor.domain.expiring'
     | 'test.ping'
   >;
   signing?: {
@@ -536,8 +538,26 @@ export interface TelegramChannelConfig {
   disable_notification?: boolean;
   protect_content?: boolean;
 }
+export interface WpushChannelConfig {
+  preset: 'wpush';
+  api_key?: string;
+  api_key_secret_ref?: string;
+  api_key_configured?: boolean;
+  api_key_source?: 'stored' | 'secret_ref';
+  channel: string;
+  option?: string;
+  url?: string;
+  timeout_ms?: number;
+  title_template?: string;
+  message_template?: string;
+  enabled_events?: CustomWebhookChannelConfig['enabled_events'];
+}
 
-export type WebhookChannelConfig = CustomWebhookChannelConfig | TelegramChannelConfig;
+
+export type WebhookChannelConfig =
+  | CustomWebhookChannelConfig
+  | TelegramChannelConfig
+  | WpushChannelConfig;
 
 export interface NotificationChannel {
   id: number;
