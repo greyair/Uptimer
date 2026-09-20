@@ -35,7 +35,6 @@ import { refreshPublicHomepageSnapshotIfNeeded } from '../snapshots';
 import { runHttpCheck } from '../monitor/http';
 import { runGlobalpingHttpCheck } from '../monitor/globalping';
 import {
-  deleteMonitorExtension,
   getMonitorExtension,
   listMonitorExtensions,
   upsertMonitorExtension,
@@ -904,7 +903,8 @@ adminRoutes.post('/monitors/:id/pause', async (c) => {
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(monitor, state ?? null) });
+  const extension = await getMonitorExtension(c.env.DB, monitor.id);
+  return c.json({ monitor: monitorRowToApi(monitor, state ?? null, extension) });
 });
 
 adminRoutes.post('/monitors/:id/resume', async (c) => {
