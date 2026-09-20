@@ -807,6 +807,7 @@ type CachedMonitorHttpJson = {
 const cachedMonitorHttpJsonById = new Map<number, CachedMonitorHttpJson>();
 let httpCheckModulePromise: Promise<typeof import('../monitor/http')> | null = null;
 let tcpCheckModulePromise: Promise<typeof import('../monitor/tcp')> | null = null;
+let globalpingCheckModulePromise: Promise<typeof import('../monitor/globalping')> | null = null;
 
 export type DueMonitorRow = {
   id: number;
@@ -827,6 +828,8 @@ export type DueMonitorRow = {
   response_keyword_mode: HttpResponseMatchMode | null;
   response_forbidden_keyword: string | null;
   response_forbidden_keyword_mode: HttpResponseMatchMode | null;
+  probe_mode: string | null;
+  globalping_locations_json: string | null;
   state_status: string | null;
   state_last_error: string | null;
   last_checked_at: number | null;
@@ -843,6 +846,11 @@ async function getHttpCheckModule() {
 async function getTcpCheckModule() {
   tcpCheckModulePromise ??= import('../monitor/tcp');
   return await tcpCheckModulePromise;
+}
+
+async function getGlobalpingCheckModule() {
+  globalpingCheckModulePromise ??= import('../monitor/globalping');
+  return await globalpingCheckModulePromise;
 }
 
 async function hasActiveWebhookChannels(db: D1Database): Promise<boolean> {
@@ -903,6 +911,8 @@ const LIST_DUE_MONITORS_SQL = `
     m.response_keyword_mode,
     m.response_forbidden_keyword,
     m.response_forbidden_keyword_mode,
+    e.probe_mode,
+    e.globalping_locations_json,
     s.status AS state_status,
     s.last_error AS state_last_error,
     s.last_checked_at,
@@ -911,6 +921,7 @@ const LIST_DUE_MONITORS_SQL = `
     s.consecutive_successes
   FROM monitors m
   LEFT JOIN monitor_state s ON s.monitor_id = m.id
+  LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
   WHERE m.is_active = 1
     AND (s.status IS NULL OR s.status != 'paused')
     AND (s.last_checked_at IS NULL OR s.last_checked_at <= ?1 - m.interval_sec)
@@ -1072,6 +1083,8 @@ export async function listMonitorRowsByIds(
         m.response_keyword_mode,
         m.response_forbidden_keyword,
         m.response_forbidden_keyword_mode,
+        e.probe_mode,
+        e.globalping_locations_json,
         s.status AS state_status,
         s.last_error AS state_last_error,
         s.last_checked_at,
@@ -1080,6 +1093,7 @@ export async function listMonitorRowsByIds(
         s.consecutive_successes
       FROM monitors m
       LEFT JOIN monitor_state s ON s.monitor_id = m.id
+      LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
       WHERE m.is_active = 1
         AND (s.status IS NULL OR s.status != 'paused')
         AND m.id IN (${placeholders})
@@ -1427,7 +1441,7 @@ function toCheckResultBindings(completed: CompletedDueMonitor): unknown[] {
     outcome.latencyMs,
     outcome.httpStatus,
     checkError,
-    null,
+    outcome.location ?? null,
     outcome.attempts,
   ];
 }
@@ -1594,21 +1608,52 @@ async function runDueMonitor(
           });
         }
 
-        const { runHttpCheck } = await getHttpCheckModule();
-        outcome = await runHttpCheck({
-          url: row.target,
-          timeoutMs: row.timeout_ms,
-          method: httpMethod,
-          headers: httpHeaders,
-          body: row.http_body,
-          followRedirects: toBooleanDefaultTrue(row.follow_redirects),
-          expectedStatus,
-          forbiddenStatus,
-          responseKeyword: row.response_keyword,
-          responseKeywordMode: row.response_keyword_mode,
-          responseForbiddenKeyword: row.response_forbidden_keyword,
-          responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
-        });
+        const probeMode = row.probe_mode === 'globalping' ? 'globalping' : 'direct';
+        if (probeMode === 'globalping') {
+          let locations: string[] = [];
+          try {
+            const parsed = row.globalping_locations_json
+              ? (JSON.parse(row.globalping_locations_json) as unknown)
+              : [];
+            locations = Array.isArray(parsed)
+              ? parsed.filter((item): item is string => typeof item === 'string')
+              : [];
+          } catch {
+            locations = [];
+          }
+
+          const { runGlobalpingHttpCheck } = await getGlobalpingCheckModule();
+          outcome = await runGlobalpingHttpCheck({
+            url: row.target,
+            timeoutMs: row.timeout_ms,
+            method: httpMethod,
+            headers: httpHeaders,
+            body: row.http_body,
+            expectedStatus,
+            forbiddenStatus,
+            responseKeyword: row.response_keyword,
+            responseKeywordMode: row.response_keyword_mode,
+            responseForbiddenKeyword: row.response_forbidden_keyword,
+            responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
+            locations,
+          });
+        } else {
+          const { runHttpCheck } = await getHttpCheckModule();
+          outcome = await runHttpCheck({
+            url: row.target,
+            timeoutMs: row.timeout_ms,
+            method: httpMethod,
+            headers: httpHeaders,
+            body: row.http_body,
+            followRedirects: toBooleanDefaultTrue(row.follow_redirects),
+            expectedStatus,
+            forbiddenStatus,
+            responseKeyword: row.response_keyword,
+            responseKeywordMode: row.response_keyword_mode,
+            responseForbiddenKeyword: row.response_forbidden_keyword,
+            responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
+          });
+        }
       }
     } else if (row.type === 'tcp') {
       const { runTcpCheck } = await getTcpCheckModule();
@@ -1812,6 +1857,11 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   const claimedLeaseExpiresAt = now + LOCK_LEASE_SECONDS;
   const totalStart = performance.now();
   const currentNow = () => Math.floor(Date.now() / 1000);
+  ctx.waitUntil(
+    import('../monitor/auxiliary')
+      .then(({ runDueAuxiliaryChecks }) => runDueAuxiliaryChecks(env.DB, now))
+      .catch((err) => console.warn('scheduled auxiliary checks failed', err)),
+  );
   const queueShardedPublicSnapshotWork = () =>
     runScheduledShardedPublicSnapshotWork(env).catch((err) => {
       console.warn('scheduled sharded public snapshot work failed', err);
