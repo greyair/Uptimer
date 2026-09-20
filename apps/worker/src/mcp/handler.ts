@@ -561,11 +561,12 @@ async function callTool(
         throw new ToolCallError(`Notification channel #${channelId} not found`);
       }
 
-      const config = {
-        ...channel.config_json,
-        ...(monitorIds.length > 0 ? { monitor_ids: monitorIds } : { monitor_ids: undefined }),
-      };
-      if (monitorIds.length === 0) delete config.monitor_ids;
+      const config: Record<string, unknown> = { ...channel.config_json };
+      if (monitorIds.length > 0) {
+        config.monitor_ids = monitorIds;
+      } else {
+        delete config.monitor_ids;
+      }
 
       return callAdminApi(env, ctx, `/notification-channels/${channelId}`, {
         method: 'PATCH',
