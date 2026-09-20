@@ -147,20 +147,23 @@ function validateModernHeaders(request: Request, body: McpRequest): string | nul
   if (!isModernRequest(request, body)) return null;
 
   const protocol = request.headers.get('MCP-Protocol-Version');
-  if (protocol && protocol !== MODERN_PROTOCOL_VERSION) {
+  if (!protocol) return 'MCP-Protocol-Version header is required';
+  if (protocol !== MODERN_PROTOCOL_VERSION) {
     return `Unsupported MCP protocol version: ${protocol}`;
   }
 
   const method = typeof body.method === 'string' ? body.method : '';
   const methodHeader = request.headers.get('Mcp-Method');
-  if (methodHeader && methodHeader !== method) {
+  if (!methodHeader) return 'Mcp-Method header is required';
+  if (methodHeader !== method) {
     return 'Mcp-Method header does not match JSON-RPC method';
   }
 
   if (method === 'tools/call' && isRecord(body.params)) {
     const name = typeof body.params.name === 'string' ? body.params.name : '';
     const nameHeader = request.headers.get('Mcp-Name');
-    if (nameHeader && nameHeader !== name) {
+    if (!nameHeader) return 'Mcp-Name header is required for tools/call';
+    if (nameHeader !== name) {
       return 'Mcp-Name header does not match params.name';
     }
   }
