@@ -129,6 +129,15 @@ function createEnv(monitorsById: Map<number, StoredMonitorRow>): Env {
       },
     },
     {
+      match: 'from monitor_extensions',
+      first: () => null,
+      all: () => [],
+    },
+    {
+      match: 'insert into monitor_extensions',
+      run: () => ({ meta: { changes: 1 } }),
+    },
+    {
       match: 'public_snapshot_guard_versions',
       run: () => ({ meta: { changes: 1 } }),
     },
