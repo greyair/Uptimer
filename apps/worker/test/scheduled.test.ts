@@ -147,6 +147,10 @@ function createEnv(options: CreateEnvOptions = {}): Env {
       all: () => windowMonitorLinks,
     },
     {
+      match: 'update monitor_extensions',
+      run: () => ({ meta: { changes: 1 } }),
+    },
+    {
       match: 'insert into check_results',
       run: (args, normalizedSql) => {
         onRun?.(normalizedSql, args);
