@@ -6,6 +6,7 @@ import type {
   NotificationChannelPreset,
   TelegramChannelConfig,
   TelegramParseMode,
+  WpushChannelConfig,
   WebhookChannelConfig,
 } from '../api/types';
 import { useI18n } from '../app/I18nContext';
@@ -37,6 +38,7 @@ type WebhookMethod = NonNullable<CustomWebhookChannelConfig['method']>;
 type WebhookPayloadType = NonNullable<CustomWebhookChannelConfig['payload_type']>;
 type TelegramParseModeInput = '' | TelegramParseMode;
 type TelegramTokenMode = 'token' | 'secret_ref';
+type WpushTokenMode = 'token' | 'secret_ref';
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -51,6 +53,12 @@ function isTelegramConfig(
 ): config is TelegramChannelConfig {
   return config?.preset === 'telegram';
 }
+function isWpushConfig(
+  config: WebhookChannelConfig | undefined,
+): config is WpushChannelConfig {
+  return config?.preset === 'wpush';
+}
+
 
 function hasAdvancedTelegramConfig(config: TelegramChannelConfig | undefined): boolean {
   if (!config) return false;
@@ -69,7 +77,9 @@ function hasAdvancedTelegramConfig(config: TelegramChannelConfig | undefined): b
 }
 
 function toPreset(value: string): NotificationChannelPreset {
-  return value === 'telegram' ? 'telegram' : 'custom';
+  if (value === 'telegram') return 'telegram';
+  if (value === 'wpush') return 'wpush';
+  return 'custom';
 }
 
 function toMethod(value: string): WebhookMethod {
@@ -118,16 +128,21 @@ export function NotificationChannelForm({
   const { t } = useI18n();
   const initialConfig = channel?.config_json;
   const initialIsTelegram = isTelegramConfig(initialConfig);
-  const customConfig = initialIsTelegram
-    ? undefined
-    : (initialConfig as CustomWebhookChannelConfig | undefined);
+  const initialIsWpush = isWpushConfig(initialConfig);
+  const customConfig =
+    initialIsTelegram || initialIsWpush
+      ? undefined
+      : (initialConfig as CustomWebhookChannelConfig | undefined);
   const telegramConfig = initialIsTelegram
     ? (initialConfig as TelegramChannelConfig | undefined)
+    : undefined;
+  const wpushConfig = initialIsWpush
+    ? (initialConfig as WpushChannelConfig | undefined)
     : undefined;
 
   const [name, setName] = useState(channel?.name ?? '');
   const [preset, setPreset] = useState<NotificationChannelPreset>(
-    initialIsTelegram ? 'telegram' : 'custom',
+    initialIsTelegram ? 'telegram' : initialIsWpush ? 'wpush' : 'custom',
   );
   const [url, setUrl] = useState(customConfig?.url ?? '');
   const [method, setMethod] = useState<WebhookMethod>(customConfig?.method ?? 'POST');
@@ -182,9 +197,36 @@ export function NotificationChannelForm({
   const [telegramProtectContent, setTelegramProtectContent] = useState<boolean>(
     telegramConfig?.protect_content ?? false,
   );
+  const [showAdvancedWpush, setShowAdvancedWpush] = useState<boolean>(() =>
+    Boolean(
+      wpushConfig?.api_key_source === 'secret_ref' ||
+        wpushConfig?.api_key_secret_ref ||
+        wpushConfig?.option ||
+        wpushConfig?.url ||
+        wpushConfig?.timeout_ms !== undefined ||
+        wpushConfig?.title_template ||
+        wpushConfig?.message_template ||
+        (wpushConfig?.enabled_events && wpushConfig.enabled_events.length > 0),
+    ),
+  );
+  const [wpushTokenMode, setWpushTokenMode] = useState<WpushTokenMode>(
+    wpushConfig?.api_key_source === 'secret_ref' || wpushConfig?.api_key_secret_ref
+      ? 'secret_ref'
+      : 'token',
+  );
+  const [wpushApiKey, setWpushApiKey] = useState('');
+  const [wpushApiKeySecretRef, setWpushApiKeySecretRef] = useState(
+    wpushConfig?.api_key_secret_ref ?? 'UPTIMER_WPUSH_API_KEY',
+  );
+  const [wpushChannel, setWpushChannel] = useState(wpushConfig?.channel ?? 'wechat');
+  const [wpushOption, setWpushOption] = useState(wpushConfig?.option ?? '');
+  const [wpushUrl, setWpushUrl] = useState(wpushConfig?.url ?? '');
+  const [wpushTitleTemplate, setWpushTitleTemplate] = useState(
+    wpushConfig?.title_template ?? '',
+  );
 
   const headersParse = useMemo(() => {
-    if (preset === 'telegram') return { ok: true as const, value: {} as Record<string, string> };
+    if (preset !== 'custom') return { ok: true as const, value: {} as Record<string, string> };
 
     const trimmed = headersJson.trim();
     if (!trimmed) return { ok: true as const, value: {} as Record<string, string> };
@@ -216,7 +258,7 @@ export function NotificationChannelForm({
   }, [headersJson, preset, t]);
 
   const payloadTemplateParse = useMemo(() => {
-    if (preset === 'telegram') {
+    if (preset !== 'custom') {
       return { ok: true as const, value: undefined as unknown };
     }
 
@@ -245,10 +287,20 @@ export function NotificationChannelForm({
   const telegramHasUsableToken = telegramUsesSecretRef
     ? telegramBotTokenSecretRef.trim().length > 0
     : telegramBotToken.trim().length > 0 || Boolean(channel && telegramHasStoredToken);
+  const wpushHasStoredKey = Boolean(
+    wpushConfig?.api_key_configured ||
+      wpushConfig?.api_key_secret_ref ||
+      wpushConfig?.api_key_source,
+  );
+  const wpushUsesSecretRef = showAdvancedWpush && wpushTokenMode === 'secret_ref';
+  const wpushHasUsableKey = wpushUsesSecretRef
+    ? wpushApiKeySecretRef.trim().length > 0
+    : wpushApiKey.trim().length > 0 || Boolean(channel && wpushHasStoredKey);
   const canSubmit =
     headersParse.ok &&
     payloadTemplateParse.ok &&
-    (preset !== 'telegram' || (telegramChatId.trim().length > 0 && telegramHasUsableToken));
+    (preset !== 'telegram' || (telegramChatId.trim().length > 0 && telegramHasUsableToken)) &&
+    (preset !== 'wpush' || (wpushChannel.trim().length > 0 && wpushHasUsableKey));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -296,6 +348,31 @@ export function NotificationChannelForm({
       return;
     }
 
+    if (preset === 'wpush') {
+      const config: WpushChannelConfig = {
+        preset: 'wpush',
+        channel: wpushChannel.trim() || 'wechat',
+      };
+
+      if (wpushUsesSecretRef) {
+        config.api_key_secret_ref = wpushApiKeySecretRef.trim();
+      } else if (wpushApiKey.trim()) {
+        config.api_key = wpushApiKey.trim();
+      }
+
+      if (showAdvancedWpush) {
+        if (wpushOption.trim()) config.option = wpushOption.trim();
+        if (wpushUrl.trim()) config.url = wpushUrl.trim();
+        if (timeoutMs) config.timeout_ms = timeoutMs;
+        if (wpushTitleTemplate.trim()) config.title_template = wpushTitleTemplate.trim();
+        if (messageTemplate.trim()) config.message_template = messageTemplate;
+        if (enabledEvents.length > 0) config.enabled_events = enabledEvents;
+      }
+
+      onSubmit({ name, type: 'webhook', config_json: config });
+      return;
+    }
+
     const config: CustomWebhookChannelConfig = {
       preset: 'custom',
       url,
@@ -334,7 +411,7 @@ export function NotificationChannelForm({
   const handlePresetChange = (next: NotificationChannelPreset) => {
     setPreset(next);
     if (!channel && !name.trim()) {
-      setName(next === 'telegram' ? 'Telegram' : 'Webhook');
+      setName(next === 'telegram' ? 'Telegram' : next === 'wpush' ? 'WPush' : 'Webhook');
     }
   };
 
@@ -346,6 +423,8 @@ export function NotificationChannelForm({
     'incident.resolved',
     'maintenance.started',
     'maintenance.ended',
+    'monitor.ssl.expiring',
+    'monitor.domain.expiring',
   ];
 
   return (
