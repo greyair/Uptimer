@@ -1733,6 +1733,7 @@ async function persistCompletedMonitors(
       statements.push(...buildOutageStatements(monitor, templates));
 
       if (monitor.outcome.location === 'globalping') {
+        const regionResultsJson = JSON.stringify(monitor.outcome.regionResults ?? []);
         statements.push(
           db
             .prepare(
@@ -1742,11 +1743,17 @@ async function persistCompletedMonitors(
                    updated_at = ?2
                WHERE monitor_id = ?3`,
             )
-            .bind(
-              JSON.stringify(monitor.outcome.regionResults ?? []),
-              monitor.checkedAt,
-              monitor.row.id,
-            ),
+            .bind(regionResultsJson, monitor.checkedAt, monitor.row.id),
+        );
+        statements.push(
+          db
+            .prepare(
+              `INSERT INTO globalping_history (monitor_id, checked_at, results_json)
+               VALUES (?1, ?2, ?3)
+               ON CONFLICT(monitor_id, checked_at) DO UPDATE SET
+                 results_json = excluded.results_json`,
+            )
+            .bind(monitor.row.id, monitor.checkedAt, regionResultsJson),
         );
       }
     }
