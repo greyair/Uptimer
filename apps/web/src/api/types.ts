@@ -3,6 +3,7 @@
 export type MonitorStatus = 'up' | 'down' | 'maintenance' | 'paused' | 'unknown';
 export type CheckStatus = 'up' | 'down' | 'maintenance' | 'unknown';
 export type MonitorType = 'http' | 'tcp';
+export type ProbeMode = 'direct' | 'globalping';
 export type HttpResponseMatchMode = 'contains' | 'regex';
 /** Exact code or inclusive range (100-599). Matches worker/DB status rule JSON. */
 export type StatusCodeRule = number | { from: number; to: number };
@@ -368,6 +369,19 @@ export interface AdminMonitor {
   created_at: number;
   updated_at: number;
 
+  probe_mode: ProbeMode;
+  globalping_locations: string[];
+  ssl_check_enabled: boolean;
+  ssl_warn_days: number;
+  ssl_last_checked_at: number | null;
+  ssl_expires_at: number | null;
+  ssl_error: string | null;
+  domain_name: string | null;
+  domain_warn_days: number;
+  domain_last_checked_at: number | null;
+  domain_expires_at: number | null;
+  domain_error: string | null;
+
   // Runtime state (from monitor_state)
   status: MonitorStatus;
   last_checked_at: number | null;
@@ -397,6 +411,12 @@ export interface CreateMonitorInput {
   response_forbidden_keyword?: string;
   response_forbidden_keyword_mode?: HttpResponseMatchMode;
   is_active?: boolean;
+  probe_mode?: ProbeMode;
+  globalping_locations?: string[];
+  ssl_check_enabled?: boolean;
+  ssl_warn_days?: number;
+  domain_name?: string | null;
+  domain_warn_days?: number;
 }
 
 export interface PatchMonitorInput {
@@ -420,6 +440,12 @@ export interface PatchMonitorInput {
   response_forbidden_keyword?: string | null;
   response_forbidden_keyword_mode?: HttpResponseMatchMode | null;
   is_active?: boolean;
+  probe_mode?: ProbeMode;
+  globalping_locations?: string[] | null;
+  ssl_check_enabled?: boolean;
+  ssl_warn_days?: number;
+  domain_name?: string | null;
+  domain_warn_days?: number;
 }
 
 export interface ReorderMonitorGroupsInput {
@@ -446,6 +472,14 @@ export interface AssignMonitorsToGroupResult {
   updated_monitors: number;
 }
 
+export interface MonitorTestRegionResult {
+  location: string;
+  status: 'up' | 'down' | 'unknown';
+  latencyMs: number | null;
+  httpStatus: number | null;
+  error: string | null;
+}
+
 export interface MonitorTestResult {
   monitor: { id: number; name: string; type: MonitorType };
   result: {
@@ -454,6 +488,8 @@ export interface MonitorTestResult {
     http_status: number | null;
     error: string | null;
     attempts: number;
+    location?: string | null;
+    region_results?: MonitorTestRegionResult[];
   };
 }
 
