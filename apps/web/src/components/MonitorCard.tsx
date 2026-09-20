@@ -4,6 +4,7 @@ import type {
   HomepageHeartbeatStrip,
   HomepageMonitorCard,
   PublicMonitor,
+  PublicGlobalpingRegionStatus,
   UptimeRatingLevel,
 } from '../api/types';
 import { useI18n } from '../app/I18nContext';
@@ -59,6 +60,7 @@ export interface MonitorCardProps {
   timeZone: string;
   onSelect: () => void;
   onDayClick: (dayStartAt: number) => void;
+  regionStatuses?: PublicGlobalpingRegionStatus[] | undefined;
 }
 
 function hasHomepageStrips(monitor: MonitorLike): monitor is HomepageMonitorLike {
@@ -121,6 +123,7 @@ export function MonitorCard({
   onSelect,
   onDayClick,
   timeZone,
+  regionStatuses,
 }: MonitorCardProps) {
   const { locale, t } = useI18n();
   const uptime30d = monitor.uptime_30d;
@@ -188,6 +191,24 @@ export function MonitorCard({
           <Badge variant={monitor.status}>{statusLabel(monitor.status, t)}</Badge>
         </div>
       </div>
+
+      {regionStatuses && regionStatuses.length > 0 && (
+        <div className="mb-2.5 flex flex-wrap gap-1.5">
+          {regionStatuses.map((region) => (
+            <span
+              key={region.location}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-300"
+              title={region.error ?? undefined}
+            >
+              <StatusDot status={region.status} size="sm" />
+              <span className="max-w-[10rem] truncate">{region.location}</span>
+              <span className="tabular-nums text-slate-400 dark:text-slate-500">
+                {region.latency_ms === null ? '-' : `${region.latency_ms}ms`}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Availability (60d) */}
       <div>
