@@ -62,7 +62,13 @@ export async function checkSslCertificate(
           authorized: socket.authorized,
           subject: dnToString(cert.subject),
           issuer: dnToString(cert.issuer),
-          error: socket.authorized ? null : socket.authorizationError ?? 'TLS certificate rejected',
+          error: socket.authorized
+            ? null
+            : typeof socket.authorizationError === 'string'
+              ? socket.authorizationError
+              : socket.authorizationError instanceof Error
+                ? socket.authorizationError.message
+                : 'TLS certificate rejected',
         });
       } catch (err) {
         finish({
