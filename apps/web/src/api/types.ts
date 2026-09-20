@@ -227,6 +227,25 @@ export interface LatencyResponse {
   points: LatencyPoint[];
 }
 
+export interface GlobalpingHistoryPoint {
+  checked_at: number;
+  status: 'up' | 'down' | 'unknown';
+  latency_ms: number | null;
+  http_status: number | null;
+  error: string | null;
+}
+
+export interface GlobalpingHistoryResponse {
+  monitor: { id: number; name: string };
+  range: '24h';
+  range_start_at: number;
+  range_end_at: number;
+  regions: Array<{
+    location: string;
+    points: GlobalpingHistoryPoint[];
+  }>;
+}
+
 export interface UptimeResponse {
   monitor: { id: number; name: string };
   range: '24h' | '7d' | '30d';
