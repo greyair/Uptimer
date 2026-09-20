@@ -715,6 +715,12 @@ export async function handleFetch(request: Request, env: Env, ctx: ExecutionCont
     return new Response('ok');
   }
 
+  if (url.pathname === '/api/mcp' || url.pathname === '/api/v1/mcp') {
+    const { handleMcpRequest } = await import('./mcp/handler');
+    const response = await handleMcpRequest(normalizedRequest, env, ctx);
+    return applyCorsHeaders(response, origin, 'POST, OPTIONS');
+  }
+
   if (resolvedApiPath) {
     if (normalizedRequest.method === 'OPTIONS') {
       const res = corsPreflight(origin, corsAllowedMethods);
