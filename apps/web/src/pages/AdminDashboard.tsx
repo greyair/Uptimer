@@ -95,6 +95,11 @@ type ChannelTestFeedback = {
   delivery: Awaited<ReturnType<typeof testNotificationChannel>>['delivery'];
 };
 
+function daysUntilUnix(unixSeconds: number | null): number | null {
+  if (unixSeconds === null) return null;
+  return Math.ceil((unixSeconds * 1000 - Date.now()) / 86_400_000);
+}
+
 type ChannelTestErrorState = {
   channelId: number;
   at: number;
@@ -1463,6 +1468,8 @@ export function AdminDashboard() {
                               const showGroupHeader =
                                 monitorGroupMode === 'grouped' && groupLabel !== prevGroupLabel;
                               const groupMeta = monitorGroupMetaByLabel.get(groupLabel);
+                              const sslDaysRemaining = daysUntilUnix(m.ssl_expires_at);
+                              const domainDaysRemaining = daysUntilUnix(m.domain_expires_at);
 
                               return (
                                 <Fragment key={m.id}>
@@ -1536,6 +1543,53 @@ export function AdminDashboard() {
                                           {t('common.display_url')}: {m.display_url}
                                         </a>
                                       )}
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {m.probe_mode === 'globalping' && (
+                                          <Badge variant="info">
+                                            {t('admin_dashboard.monitor_probe_globalping', {
+                                              count: m.globalping_locations.length,
+                                            })}
+                                          </Badge>
+                                        )}
+                                        {m.ssl_check_enabled && (
+                                          <Badge
+                                            variant={
+                                              m.ssl_error ||
+                                              (sslDaysRemaining !== null &&
+                                                sslDaysRemaining <= m.ssl_warn_days)
+                                                ? 'down'
+                                                : 'up'
+                                            }
+                                          >
+                                            {m.ssl_error
+                                              ? t('admin_dashboard.monitor_ssl_error')
+                                              : sslDaysRemaining === null
+                                                ? t('admin_dashboard.monitor_ssl_pending')
+                                                : t('admin_dashboard.monitor_ssl_days', {
+                                                    count: sslDaysRemaining,
+                                                  })}
+                                          </Badge>
+                                        )}
+                                        {m.domain_name && (
+                                          <Badge
+                                            variant={
+                                              m.domain_error ||
+                                              (domainDaysRemaining !== null &&
+                                                domainDaysRemaining <= m.domain_warn_days)
+                                                ? 'down'
+                                                : 'up'
+                                            }
+                                          >
+                                            {m.domain_error
+                                              ? t('admin_dashboard.monitor_domain_error')
+                                              : domainDaysRemaining === null
+                                                ? t('admin_dashboard.monitor_domain_pending')
+                                                : t('admin_dashboard.monitor_domain_days', {
+                                                    count: domainDaysRemaining,
+                                                  })}
+                                          </Badge>
+                                        )}
+                                      </div>
                                     </td>
                                     <td className="px-3 sm:px-4 py-3">
                                       <div className="flex items-center gap-2">
