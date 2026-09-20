@@ -48,6 +48,7 @@ import {
 import { validateHttpTarget, validateTcpTarget } from '../monitor/targets';
 import { runTcpCheck } from '../monitor/tcp';
 import {
+  dispatchWebhookToChannel,
   dispatchWebhookToChannelLegacy,
   dispatchWebhookToChannels,
   type WebhookChannel,
@@ -1545,6 +1546,23 @@ async function listMaintenanceWindowMonitorIdsByWindowId(
 adminRoutes.post('/notification-channels/:id/test', async (c) => {
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
 
+  const rawBody = await c.req.json().catch(() => ({}));
+  const testInput = z
+    .object({
+      event_type: z
+        .enum([
+          'test.ping',
+          'monitor.down',
+          'monitor.up',
+          'monitor.ssl.expiring',
+          'monitor.domain.expiring',
+        ])
+        .optional()
+        .default('test.ping'),
+      monitor_id: z.number().int().positive().optional(),
+    })
+    .parse(rawBody);
+
   const channelRow = await c.env.DB.prepare(
     `
       SELECT id, name, type, config_json, is_active, created_at
@@ -1565,20 +1583,92 @@ adminRoutes.post('/notification-channels/:id/test', async (c) => {
   const channel = { id: channelRow.id, name: channelRow.name, config };
 
   const now = Math.floor(Date.now() / 1000);
-  const eventKey = `test:webhook:${id}:${now}`;
-  const payload = {
-    event: 'test.ping',
-    event_id: eventKey,
-    timestamp: now,
-    // Provide representative fields so templates can be validated via the test button.
-    monitor: { id: 0, name: 'Example monitor', type: 'http', target: 'https://example.com/health' },
-    state: { status: 'up', latency_ms: 123, http_status: 200, error: null, location: null },
-  };
+  const eventType = testInput.event_type;
 
-  await dispatchWebhookToChannelLegacy({
+  let monitor:
+    | {
+        id: number;
+        name: string;
+        type: string;
+        target: string;
+        display_url: string | null;
+      }
+    | null = null;
+
+  if (eventType !== 'test.ping') {
+    if (!testInput.monitor_id) {
+      throw new AppError(400, 'INVALID_ARGUMENT', 'monitor_id is required for monitor event tests');
+    }
+
+    monitor = await c.env.DB.prepare(
+      `
+        SELECT id, name, type, target, display_url
+        FROM monitors
+        WHERE id = ?1
+      `,
+    )
+      .bind(testInput.monitor_id)
+      .first<{
+        id: number;
+        name: string;
+        type: string;
+        target: string;
+        display_url: string | null;
+      }>();
+
+    if (!monitor) {
+      throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
+    }
+  }
+
+  const eventKey = `test:webhook:${id}:${eventType}:${monitor?.id ?? 0}:${now}`;
+  const payload =
+    eventType === 'test.ping'
+      ? {
+          event: eventType,
+          event_id: eventKey,
+          timestamp: now,
+          monitor: {
+            id: 0,
+            name: 'Example monitor',
+            type: 'http',
+            target: 'https://example.com/health',
+          },
+          state: { status: 'up', latency_ms: 123, http_status: 200, error: null, location: null },
+        }
+      : eventType === 'monitor.ssl.expiring' || eventType === 'monitor.domain.expiring'
+        ? {
+            event: eventType,
+            event_id: eventKey,
+            timestamp: now,
+            monitor,
+            expiry: {
+              kind: eventType === 'monitor.ssl.expiring' ? 'ssl' : 'domain',
+              subject: monitor?.target ?? '',
+              expires_at: now + 7 * 86400,
+              warn_days: 30,
+              days_remaining: 7,
+            },
+          }
+        : {
+            event: eventType,
+            event_id: eventKey,
+            timestamp: now,
+            monitor,
+            state: {
+              status: eventType === 'monitor.down' ? 'down' : 'up',
+              latency_ms: 123,
+              http_status: 200,
+              error: eventType === 'monitor.down' ? 'Simulated test failure' : null,
+              location: null,
+            },
+          };
+
+  const dispatchResult = await dispatchWebhookToChannel({
     db: c.env.DB,
     env: c.env as unknown as Record<string, unknown>,
     channel,
+    eventType,
     eventKey,
     payload,
   });
@@ -1595,6 +1685,9 @@ adminRoutes.post('/notification-channels/:id/test', async (c) => {
 
   return c.json({
     event_key: eventKey,
+    event_type: eventType,
+    monitor_id: monitor?.id ?? null,
+    skipped: dispatchResult === 'skipped',
     delivery: delivery
       ? {
           status: delivery.status,
