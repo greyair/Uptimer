@@ -1093,6 +1093,48 @@ export function AdminDashboard() {
                     })}
                   </span>
                 </div>
+                {monitorTestFeedback.result.region_results &&
+                  monitorTestFeedback.result.region_results.length > 0 && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {monitorTestFeedback.result.region_results.map((region) => (
+                        <div
+                          key={region.location}
+                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium text-slate-700 dark:text-slate-200">
+                              {region.location}
+                            </span>
+                            <Badge
+                              variant={
+                                region.status === 'up'
+                                  ? 'up'
+                                  : region.status === 'down'
+                                    ? 'down'
+                                    : 'unknown'
+                              }
+                            >
+                              {statusLabel(region.status, t)}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                            <span>
+                              HTTP {region.httpStatus !== null ? region.httpStatus : '-'}
+                            </span>
+                            <span>
+                              {region.latencyMs !== null ? `${region.latencyMs}ms` : '-'}
+                            </span>
+                          </div>
+                          {region.error && (
+                            <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                              {region.error}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                 <div
                   className={`mt-2 text-sm ${
                     monitorTestFeedback.result.error
