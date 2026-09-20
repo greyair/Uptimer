@@ -1858,8 +1858,16 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   const totalStart = performance.now();
   const currentNow = () => Math.floor(Date.now() / 1000);
   ctx.waitUntil(
-    import('../monitor/auxiliary')
-      .then(({ runDueAuxiliaryChecks }) => runDueAuxiliaryChecks(env.DB, now))
+    Promise.all([import('../monitor/auxiliary'), import('./notifications')])
+      .then(async ([{ runDueAuxiliaryChecks }, notificationsModule]) => {
+        const alerts = await runDueAuxiliaryChecks(env.DB, now);
+        if (alerts.length === 0) return;
+
+        const notify = await notificationsModule.createNotifyContext(env, ctx);
+        if (!notify) return;
+
+        await notificationsModule.emitExpiryNotifications(env, notify, alerts, now);
+      })
       .catch((err) => console.warn('scheduled auxiliary checks failed', err)),
   );
   const queueShardedPublicSnapshotWork = () =>
