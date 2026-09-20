@@ -603,8 +603,18 @@ export interface PatchNotificationChannelInput {
   is_active?: boolean;
 }
 
+export type NotificationChannelTestEventType =
+  | 'test.ping'
+  | 'monitor.down'
+  | 'monitor.up'
+  | 'monitor.ssl.expiring'
+  | 'monitor.domain.expiring';
+
 export interface NotificationChannelTestResult {
   event_key: string;
+  event_type: NotificationChannelTestEventType;
+  monitor_id: number | null;
+  skipped: boolean;
   delivery: {
     status: string;
     http_status: number | null;
