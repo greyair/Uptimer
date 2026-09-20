@@ -187,6 +187,7 @@ export const customWebhookChannelConfigSchema = z
 
     // If omitted, the channel receives all events.
     enabled_events: z.array(notificationEventTypeSchema).min(1).optional(),
+    monitor_ids: z.array(z.number().int().positive()).max(200).optional(),
 
     signing: webhookSigningSchema.optional(),
   })
@@ -246,6 +247,7 @@ export const telegramChannelConfigSchema = z
 
     // If omitted, the channel receives all events.
     enabled_events: z.array(notificationEventTypeSchema).min(1).optional(),
+    monitor_ids: z.array(z.number().int().positive()).max(200).optional(),
 
     parse_mode: z.enum(['Markdown', 'MarkdownV2', 'HTML']).optional(),
     disable_notification: z.boolean().optional(),
@@ -278,6 +280,7 @@ export const wpushChannelConfigSchema = z
     title_template: z.string().min(1).max(255).optional(),
     message_template: notificationMessageTemplateSchema,
     enabled_events: z.array(notificationEventTypeSchema).min(1).optional(),
+    monitor_ids: z.array(z.number().int().positive()).max(200).optional(),
   })
   .superRefine((val, ctx) => {
     const hasEncryptedKey =
