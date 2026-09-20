@@ -151,6 +151,10 @@ function createEnv(options: CreateEnvOptions = {}): Env {
       run: () => ({ meta: { changes: 1 } }),
     },
     {
+      match: 'insert into globalping_history',
+      run: () => ({ meta: { changes: 1 } }),
+    },
+    {
       match: 'insert into check_results',
       run: (args, normalizedSql) => {
         onRun?.(normalizedSql, args);
