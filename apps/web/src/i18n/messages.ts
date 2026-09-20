@@ -328,6 +328,22 @@ const en = {
   'monitor_form.interval_sec': 'Interval (sec)',
   'monitor_form.timeout_ms': 'Timeout (ms)',
   'monitor_form.advanced_http_options': 'Advanced HTTP options',
+  'monitor_form.probe_mode': 'Probe mode',
+  'monitor_form.probe_mode_direct': 'Cloudflare direct',
+  'monitor_form.probe_mode_globalping': 'Globalping multi-region',
+  'monitor_form.probe_mode_help':
+    'Direct uses the Cloudflare Worker location. Globalping checks the target from each configured location.',
+  'monitor_form.globalping_locations': 'Globalping locations',
+  'monitor_form.globalping_locations_placeholder': 'Tokyo, Singapore, Frankfurt',
+  'monitor_form.globalping_locations_help':
+    'Comma-separated Globalping location selectors. One probe is requested per location.',
+  'monitor_form.ssl_check_enabled': 'Monitor TLS certificate expiration',
+  'monitor_form.expiry_warn_days': 'Certificate warning threshold (days)',
+  'monitor_form.ssl_https_required': 'TLS certificate monitoring requires an HTTPS target.',
+  'monitor_form.domain_name_optional': 'Registration domain (optional)',
+  'monitor_form.domain_name_help':
+    'Use the registrable domain, e.g. example.com. RDAP is checked once per day.',
+  'monitor_form.domain_warn_days': 'Domain warning threshold (days)',
   'monitor_form.follow_redirects': 'Follow redirects',
   'monitor_form.follow_redirects_help':
     'When off, the check stops at the first 3xx response. Add that status code below if it should count as up.',
@@ -786,6 +802,21 @@ const zhCn: LocaleMessages = {
   'monitor_form.interval_sec': '探测间隔（秒）',
   'monitor_form.timeout_ms': '超时（毫秒）',
   'monitor_form.advanced_http_options': '高级 HTTP 选项',
+  'monitor_form.probe_mode': '探测方式',
+  'monitor_form.probe_mode_direct': 'Cloudflare 直接探测',
+  'monitor_form.probe_mode_globalping': 'Globalping 多地区探测',
+  'monitor_form.probe_mode_help':
+    '直接探测使用 Cloudflare Worker 所在节点；Globalping 会从配置的每个地区进行探测。',
+  'monitor_form.globalping_locations': 'Globalping 地区',
+  'monitor_form.globalping_locations_placeholder': 'Tokyo, Singapore, Frankfurt',
+  'monitor_form.globalping_locations_help':
+    '使用逗号分隔 Globalping 地区选择器，每个地区请求一个探测节点。',
+  'monitor_form.ssl_check_enabled': '监控 TLS/SSL 证书到期',
+  'monitor_form.expiry_warn_days': '证书提前告警天数',
+  'monitor_form.ssl_https_required': 'SSL 证书监控要求目标必须使用 HTTPS。',
+  'monitor_form.domain_name_optional': '注册域名（可选）',
+  'monitor_form.domain_name_help': '填写可注册根域名，例如 example.com；RDAP 每天检查一次。',
+  'monitor_form.domain_warn_days': '域名提前告警天数',
   'monitor_form.follow_redirects': '跟随跳转',
   'monitor_form.follow_redirects_help':
     '关闭后，探测会停在第一个 3xx 响应；如需视为成功，请在下方期望状态码中加入对应 3xx。',
@@ -1238,6 +1269,21 @@ const zhTw: LocaleMessages = {
   'monitor_form.interval_sec': '檢查間隔（秒）',
   'monitor_form.timeout_ms': '逾時（毫秒）',
   'monitor_form.advanced_http_options': '進階 HTTP 選項',
+  'monitor_form.probe_mode': '探測方式',
+  'monitor_form.probe_mode_direct': 'Cloudflare 直接探測',
+  'monitor_form.probe_mode_globalping': 'Globalping 多地區探測',
+  'monitor_form.probe_mode_help':
+    '直接探測使用 Cloudflare Worker 所在節點；Globalping 會從每個設定地區進行探測。',
+  'monitor_form.globalping_locations': 'Globalping 地區',
+  'monitor_form.globalping_locations_placeholder': 'Tokyo, Singapore, Frankfurt',
+  'monitor_form.globalping_locations_help':
+    '以逗號分隔 Globalping 地區選擇器，每個地區請求一個探測節點。',
+  'monitor_form.ssl_check_enabled': '監控 TLS/SSL 憑證到期',
+  'monitor_form.expiry_warn_days': '憑證提前警告天數',
+  'monitor_form.ssl_https_required': 'SSL 憑證監控要求目標必須使用 HTTPS。',
+  'monitor_form.domain_name_optional': '註冊網域（選填）',
+  'monitor_form.domain_name_help': '填寫可註冊根網域，例如 example.com；RDAP 每天檢查一次。',
+  'monitor_form.domain_warn_days': '網域提前警告天數',
   'monitor_form.follow_redirects': '允許自動重新導向',
   'monitor_form.follow_redirects_help':
     '關閉後，檢查會在遇到首個 3xx 回應時停止；若需將其視為成功，請在下方預期狀態碼中加入對應的 3xx。',
