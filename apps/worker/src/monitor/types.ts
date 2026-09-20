@@ -1,3 +1,11 @@
+export type CheckRegionResult = {
+  location: string;
+  status: 'up' | 'down' | 'unknown';
+  latencyMs: number | null;
+  httpStatus: number | null;
+  error: string | null;
+};
+
 export type CheckOutcome = {
   status: 'up' | 'down' | 'unknown';
   latencyMs: number | null;
@@ -5,4 +13,5 @@ export type CheckOutcome = {
   httpStatus: number | null;
   attempts: number;
   location?: string | null;
+  regionResults?: CheckRegionResult[];
 };
