@@ -71,6 +71,10 @@ describe('scheduler/retention', () => {
           return { meta: { changes: deletes.shift() ?? 0 } };
         },
       },
+      {
+        match: 'delete from globalping_history',
+        run: () => ({ meta: { changes: 0 } }),
+      },
     ]);
 
     const scheduledTime = Date.UTC(2026, 1, 18, 0, 0, 0);

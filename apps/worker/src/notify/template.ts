@@ -180,6 +180,20 @@ export function defaultMessageForEvent(
       const title = asString(vars, 'maintenance.title');
       return `Maintenance ended: ${title}`;
     }
+    case 'monitor.ssl.expiring': {
+      const name = asString(vars, 'monitor.name');
+      const subject = asString(vars, 'expiry.subject');
+      const days = asString(vars, 'expiry.days_remaining');
+      const expiresAt = asString(vars, 'expiry.expires_at');
+      return `SSL certificate expiring: ${name}${subject ? ` (${subject})` : ''}${days ? `\nDays remaining: ${days}` : ''}${expiresAt ? `\nExpires at: ${expiresAt}` : ''}`;
+    }
+    case 'monitor.domain.expiring': {
+      const name = asString(vars, 'monitor.name');
+      const subject = asString(vars, 'expiry.subject');
+      const days = asString(vars, 'expiry.days_remaining');
+      const expiresAt = asString(vars, 'expiry.expires_at');
+      return `Domain expiring: ${name}${subject ? ` (${subject})` : ''}${days ? `\nDays remaining: ${days}` : ''}${expiresAt ? `\nExpires at: ${expiresAt}` : ''}`;
+    }
     case 'test.ping': {
       return 'Uptimer test notification';
     }

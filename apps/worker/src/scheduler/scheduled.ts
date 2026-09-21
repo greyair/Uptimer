@@ -807,6 +807,7 @@ type CachedMonitorHttpJson = {
 const cachedMonitorHttpJsonById = new Map<number, CachedMonitorHttpJson>();
 let httpCheckModulePromise: Promise<typeof import('../monitor/http')> | null = null;
 let tcpCheckModulePromise: Promise<typeof import('../monitor/tcp')> | null = null;
+let globalpingCheckModulePromise: Promise<typeof import('../monitor/globalping')> | null = null;
 
 export type DueMonitorRow = {
   id: number;
@@ -827,6 +828,8 @@ export type DueMonitorRow = {
   response_keyword_mode: HttpResponseMatchMode | null;
   response_forbidden_keyword: string | null;
   response_forbidden_keyword_mode: HttpResponseMatchMode | null;
+  probe_mode: string | null;
+  globalping_locations_json: string | null;
   state_status: string | null;
   state_last_error: string | null;
   last_checked_at: number | null;
@@ -843,6 +846,11 @@ async function getHttpCheckModule() {
 async function getTcpCheckModule() {
   tcpCheckModulePromise ??= import('../monitor/tcp');
   return await tcpCheckModulePromise;
+}
+
+async function getGlobalpingCheckModule() {
+  globalpingCheckModulePromise ??= import('../monitor/globalping');
+  return await globalpingCheckModulePromise;
 }
 
 async function hasActiveWebhookChannels(db: D1Database): Promise<boolean> {
@@ -903,6 +911,8 @@ const LIST_DUE_MONITORS_SQL = `
     m.response_keyword_mode,
     m.response_forbidden_keyword,
     m.response_forbidden_keyword_mode,
+    e.probe_mode,
+    e.globalping_locations_json,
     s.status AS state_status,
     s.last_error AS state_last_error,
     s.last_checked_at,
@@ -911,6 +921,7 @@ const LIST_DUE_MONITORS_SQL = `
     s.consecutive_successes
   FROM monitors m
   LEFT JOIN monitor_state s ON s.monitor_id = m.id
+  LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
   WHERE m.is_active = 1
     AND (s.status IS NULL OR s.status != 'paused')
     AND (s.last_checked_at IS NULL OR s.last_checked_at <= ?1 - m.interval_sec)
@@ -1072,6 +1083,8 @@ export async function listMonitorRowsByIds(
         m.response_keyword_mode,
         m.response_forbidden_keyword,
         m.response_forbidden_keyword_mode,
+        e.probe_mode,
+        e.globalping_locations_json,
         s.status AS state_status,
         s.last_error AS state_last_error,
         s.last_checked_at,
@@ -1080,6 +1093,7 @@ export async function listMonitorRowsByIds(
         s.consecutive_successes
       FROM monitors m
       LEFT JOIN monitor_state s ON s.monitor_id = m.id
+      LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
       WHERE m.is_active = 1
         AND (s.status IS NULL OR s.status != 'paused')
         AND m.id IN (${placeholders})
@@ -1177,6 +1191,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
     successesToUpFromDown: number;
   };
   onPersistedMonitor?: (completed: CompletedDueMonitor) => void;
+  globalpingApiToken?: string | undefined;
   trace?: Trace;
   trustSchedulerLease?: boolean;
 }): Promise<MonitorBatchExecutionResult> {
@@ -1205,6 +1220,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
       stateMachineConfig: opts.stateMachineConfig,
       ...(opts.suppressedMonitorIds ? { suppressedMonitorIds: opts.suppressedMonitorIds } : {}),
       ...(opts.onPersistedMonitor ? { onPersistedMonitor: opts.onPersistedMonitor } : {}),
+      ...(opts.globalpingApiToken ? { globalpingApiToken: opts.globalpingApiToken } : {}),
       ...(opts.trace ? { trace: opts.trace } : {}),
       beforePersist: () => {
         if (opts.abortSignal?.aborted) {
@@ -1276,6 +1292,7 @@ export async function runExclusivePersistedMonitorBatch(opts: {
       stateMachineConfig: opts.stateMachineConfig,
       ...(opts.suppressedMonitorIds ? { suppressedMonitorIds: opts.suppressedMonitorIds } : {}),
       ...(opts.onPersistedMonitor ? { onPersistedMonitor: opts.onPersistedMonitor } : {}),
+      ...(opts.globalpingApiToken ? { globalpingApiToken: opts.globalpingApiToken } : {}),
       ...(opts.trace ? { trace: opts.trace } : {}),
       beforePersist: () => {
         if (opts.abortSignal?.aborted) {
@@ -1427,7 +1444,7 @@ function toCheckResultBindings(completed: CompletedDueMonitor): unknown[] {
     outcome.latencyMs,
     outcome.httpStatus,
     checkError,
-    null,
+    outcome.location ?? null,
     outcome.attempts,
   ];
 }
@@ -1534,6 +1551,7 @@ async function runDueMonitor(
   checkedAt: number,
   maintenanceSuppressed: boolean,
   stateMachineConfig: { failuresToDownFromUp: number; successesToUpFromDown: number },
+  globalpingApiToken?: string,
 ): Promise<CompletedDueMonitor> {
   const prevStatus = toMonitorStatus(row.state_status);
   const prev: MonitorStateSnapshot | null =
@@ -1594,21 +1612,53 @@ async function runDueMonitor(
           });
         }
 
-        const { runHttpCheck } = await getHttpCheckModule();
-        outcome = await runHttpCheck({
-          url: row.target,
-          timeoutMs: row.timeout_ms,
-          method: httpMethod,
-          headers: httpHeaders,
-          body: row.http_body,
-          followRedirects: toBooleanDefaultTrue(row.follow_redirects),
-          expectedStatus,
-          forbiddenStatus,
-          responseKeyword: row.response_keyword,
-          responseKeywordMode: row.response_keyword_mode,
-          responseForbiddenKeyword: row.response_forbidden_keyword,
-          responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
-        });
+        const probeMode = row.probe_mode === 'globalping' ? 'globalping' : 'direct';
+        if (probeMode === 'globalping') {
+          let locations: string[] = [];
+          try {
+            const parsed = row.globalping_locations_json
+              ? (JSON.parse(row.globalping_locations_json) as unknown)
+              : [];
+            locations = Array.isArray(parsed)
+              ? parsed.filter((item): item is string => typeof item === 'string')
+              : [];
+          } catch {
+            locations = [];
+          }
+
+          const { runGlobalpingHttpCheck } = await getGlobalpingCheckModule();
+          outcome = await runGlobalpingHttpCheck({
+            url: row.target,
+            timeoutMs: row.timeout_ms,
+            method: httpMethod,
+            headers: httpHeaders,
+            body: row.http_body,
+            expectedStatus,
+            forbiddenStatus,
+            responseKeyword: row.response_keyword,
+            responseKeywordMode: row.response_keyword_mode,
+            responseForbiddenKeyword: row.response_forbidden_keyword,
+            responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
+            locations,
+            apiToken: globalpingApiToken ?? null,
+          });
+        } else {
+          const { runHttpCheck } = await getHttpCheckModule();
+          outcome = await runHttpCheck({
+            url: row.target,
+            timeoutMs: row.timeout_ms,
+            method: httpMethod,
+            headers: httpHeaders,
+            body: row.http_body,
+            followRedirects: toBooleanDefaultTrue(row.follow_redirects),
+            expectedStatus,
+            forbiddenStatus,
+            responseKeyword: row.response_keyword,
+            responseKeywordMode: row.response_keyword_mode,
+            responseForbiddenKeyword: row.response_forbidden_keyword,
+            responseForbiddenKeywordMode: row.response_forbidden_keyword_mode,
+          });
+        }
       }
     } else if (row.type === 'tcp') {
       const { runTcpCheck } = await getTcpCheckModule();
@@ -1681,6 +1731,31 @@ async function persistCompletedMonitors(
 
     for (const monitor of chunk) {
       statements.push(...buildOutageStatements(monitor, templates));
+
+      if (monitor.outcome.location === 'globalping') {
+        const regionResultsJson = JSON.stringify(monitor.outcome.regionResults ?? []);
+        statements.push(
+          db
+            .prepare(
+              `UPDATE monitor_extensions
+               SET globalping_last_results_json = ?1,
+                   globalping_last_checked_at = ?2,
+                   updated_at = ?2
+               WHERE monitor_id = ?3`,
+            )
+            .bind(regionResultsJson, monitor.checkedAt, monitor.row.id),
+        );
+        statements.push(
+          db
+            .prepare(
+              `INSERT INTO globalping_history (monitor_id, checked_at, results_json)
+               VALUES (?1, ?2, ?3)
+               ON CONFLICT(monitor_id, checked_at) DO UPDATE SET
+                 results_json = excluded.results_json`,
+            )
+            .bind(monitor.row.id, monitor.checkedAt, regionResultsJson),
+        );
+      }
     }
 
     if (statements.length > 0) {
@@ -1699,6 +1774,7 @@ export async function runPersistedMonitorBatch(opts: {
     successesToUpFromDown: number;
   };
   onPersistedMonitor?: (completed: CompletedDueMonitor) => void;
+  globalpingApiToken?: string | undefined;
   beforePersist?: () => void | Promise<void>;
   trace?: Trace;
 }): Promise<MonitorBatchExecutionResult> {
@@ -1715,6 +1791,7 @@ export async function runPersistedMonitorBatch(opts: {
             opts.checkedAt,
             suppressedMonitorIds.has(row.id),
             opts.stateMachineConfig,
+            opts.globalpingApiToken,
           ),
         ),
       ),
@@ -1883,6 +1960,17 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   };
 
   const initializeNotifications = async (): Promise<InitializedNotifications> => {
+    let expiryAlerts: Awaited<
+      ReturnType<typeof import('../monitor/auxiliary')['runDueAuxiliaryChecks']>
+    > = [];
+
+    try {
+      const { runDueAuxiliaryChecks } = await import('../monitor/auxiliary');
+      expiryAlerts = await runDueAuxiliaryChecks(env.DB, now, env.GLOBALPING_API_TOKEN);
+    } catch (err) {
+      console.warn('scheduled auxiliary checks failed', err);
+    }
+
     const hasWebhookNotifications = await hasActiveWebhookChannels(env.DB);
     if (!hasWebhookNotifications) {
       return { module: null, notify: null };
@@ -1892,6 +1980,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
     const notify = await notificationsModule.createNotifyContext(env, ctx);
     if (notify) {
       await notificationsModule.emitMaintenanceWindowNotifications(env, notify, now);
+      if (expiryAlerts.length > 0) {
+        await notificationsModule.emitExpiryNotifications(env, notify, expiryAlerts, now);
+      }
     }
     return { module: notificationsModule, notify };
   };
@@ -2046,6 +2137,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
                 abortSignal: schedulerLease.signal,
                 suppressedMonitorIds: new Set(suppressedIds),
                 stateMachineConfig,
+                ...(env.GLOBALPING_API_TOKEN
+                  ? { globalpingApiToken: env.GLOBALPING_API_TOKEN }
+                  : {}),
                 ...(inlineNotificationHandler
                   ? { onPersistedMonitor: inlineNotificationHandler }
                   : {}),
@@ -2090,6 +2184,9 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
         checkedAt,
         suppressedMonitorIds,
         stateMachineConfig,
+        ...(env.GLOBALPING_API_TOKEN
+          ? { globalpingApiToken: env.GLOBALPING_API_TOKEN }
+          : {}),
         ...(inlineNotificationHandler ? { onPersistedMonitor: inlineNotificationHandler } : {}),
         beforePersist: () => {
           schedulerLease.assertHeld('persisting inline scheduled batch');

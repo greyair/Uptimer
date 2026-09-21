@@ -15,6 +15,29 @@ const monitorGroupNameSchema = z.string().trim().min(1).max(64);
 const monitorGroupSortOrderSchema = z.number().int().min(-100_000).max(100_000);
 const monitorSortOrderSchema = z.number().int().min(-100_000).max(100_000);
 const httpResponseMatchModeSchema = z.enum(HTTP_RESPONSE_MATCH_MODES);
+const probeModeSchema = z.enum(['direct', 'globalping']);
+const globalpingLocationsSchema = z
+  .array(z.string().trim().min(1).max(128))
+  .min(1)
+  .max(10);
+const expiryWarnDaysSchema = z.number().int().min(1).max(365);
+const domainNameSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim().toLowerCase().replace(/\.$/, '');
+    return trimmed.length > 0 ? trimmed : null;
+  },
+  z
+    .string()
+    .min(3)
+    .max(253)
+    .regex(
+      /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+      'domain_name must be a valid DNS name',
+    )
+    .nullable()
+    .optional(),
+);
 const displayUrlSchema = z.preprocess(
   (value) => {
     if (typeof value !== 'string') return value;
@@ -62,12 +85,49 @@ export const createMonitorInputSchema = z
     sort_order: monitorSortOrderSchema.optional(),
     show_on_status_page: z.boolean().optional(),
     is_active: z.boolean().optional(),
+
+    probe_mode: probeModeSchema.optional(),
+    globalping_locations: globalpingLocationsSchema.optional(),
+    ssl_check_enabled: z.boolean().optional(),
+    ssl_warn_days: expiryWarnDaysSchema.optional(),
+    domain_name: domainNameSchema,
+    domain_warn_days: expiryWarnDaysSchema.optional(),
   })
   .superRefine((val, ctx) => {
     const err =
       val.type === 'http' ? validateHttpTarget(val.target) : validateTcpTarget(val.target);
     if (err) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: err, path: ['target'] });
+    }
+
+    if (val.probe_mode === 'globalping' && val.type !== 'http') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'globalping probe mode is currently supported only for http monitors',
+        path: ['probe_mode'],
+      });
+    }
+
+    if (val.probe_mode === 'globalping' && !val.globalping_locations?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'globalping_locations is required when probe_mode is globalping',
+        path: ['globalping_locations'],
+      });
+    }
+
+    if (val.ssl_check_enabled && val.type === 'http') {
+      try {
+        if (new URL(val.target).protocol !== 'https:') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'SSL certificate checks require an https target',
+            path: ['ssl_check_enabled'],
+          });
+        }
+      } catch {
+        // Target validation below reports the URL error.
+      }
     }
 
     if (
@@ -130,6 +190,13 @@ export const patchMonitorInputSchema = z
     sort_order: monitorSortOrderSchema.optional(),
     show_on_status_page: z.boolean().optional(),
     is_active: z.boolean().optional(),
+
+    probe_mode: probeModeSchema.optional(),
+    globalping_locations: globalpingLocationsSchema.nullable().optional(),
+    ssl_check_enabled: z.boolean().optional(),
+    ssl_warn_days: expiryWarnDaysSchema.optional(),
+    domain_name: domainNameSchema,
+    domain_warn_days: expiryWarnDaysSchema.optional(),
   })
   .superRefine((val, ctx) => {
     for (const issue of validateHttpResponseAssertionConfig({

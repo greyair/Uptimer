@@ -3,6 +3,7 @@
 export type MonitorStatus = 'up' | 'down' | 'maintenance' | 'paused' | 'unknown';
 export type CheckStatus = 'up' | 'down' | 'maintenance' | 'unknown';
 export type MonitorType = 'http' | 'tcp';
+export type ProbeMode = 'direct' | 'globalping';
 export type HttpResponseMatchMode = 'contains' | 'regex';
 /** Exact code or inclusive range (100-599). Matches worker/DB status rule JSON. */
 export type StatusCodeRule = number | { from: number; to: number };
@@ -226,6 +227,25 @@ export interface LatencyResponse {
   points: LatencyPoint[];
 }
 
+export interface GlobalpingHistoryPoint {
+  checked_at: number;
+  status: 'up' | 'down' | 'unknown';
+  latency_ms: number | null;
+  http_status: number | null;
+  error: string | null;
+}
+
+export interface GlobalpingHistoryResponse {
+  monitor: { id: number; name: string };
+  range: '24h';
+  range_start_at: number;
+  range_end_at: number;
+  regions: Array<{
+    location: string;
+    points: GlobalpingHistoryPoint[];
+  }>;
+}
+
 export interface UptimeResponse {
   monitor: { id: number; name: string };
   range: '24h' | '7d' | '30d';
@@ -368,6 +388,19 @@ export interface AdminMonitor {
   created_at: number;
   updated_at: number;
 
+  probe_mode: ProbeMode;
+  globalping_locations: string[];
+  ssl_check_enabled: boolean;
+  ssl_warn_days: number;
+  ssl_last_checked_at: number | null;
+  ssl_expires_at: number | null;
+  ssl_error: string | null;
+  domain_name: string | null;
+  domain_warn_days: number;
+  domain_last_checked_at: number | null;
+  domain_expires_at: number | null;
+  domain_error: string | null;
+
   // Runtime state (from monitor_state)
   status: MonitorStatus;
   last_checked_at: number | null;
@@ -397,6 +430,12 @@ export interface CreateMonitorInput {
   response_forbidden_keyword?: string;
   response_forbidden_keyword_mode?: HttpResponseMatchMode;
   is_active?: boolean;
+  probe_mode?: ProbeMode;
+  globalping_locations?: string[];
+  ssl_check_enabled?: boolean;
+  ssl_warn_days?: number;
+  domain_name?: string | null;
+  domain_warn_days?: number;
 }
 
 export interface PatchMonitorInput {
@@ -420,6 +459,12 @@ export interface PatchMonitorInput {
   response_forbidden_keyword?: string | null;
   response_forbidden_keyword_mode?: HttpResponseMatchMode | null;
   is_active?: boolean;
+  probe_mode?: ProbeMode;
+  globalping_locations?: string[] | null;
+  ssl_check_enabled?: boolean;
+  ssl_warn_days?: number;
+  domain_name?: string | null;
+  domain_warn_days?: number;
 }
 
 export interface ReorderMonitorGroupsInput {
@@ -446,6 +491,14 @@ export interface AssignMonitorsToGroupResult {
   updated_monitors: number;
 }
 
+export interface MonitorTestRegionResult {
+  location: string;
+  status: 'up' | 'down' | 'unknown';
+  latencyMs: number | null;
+  httpStatus: number | null;
+  error: string | null;
+}
+
 export interface MonitorTestResult {
   monitor: { id: number; name: string; type: MonitorType };
   result: {
@@ -454,10 +507,12 @@ export interface MonitorTestResult {
     http_status: number | null;
     error: string | null;
     attempts: number;
+    location?: string | null;
+    region_results?: MonitorTestRegionResult[];
   };
 }
 
-export type NotificationChannelPreset = 'custom' | 'telegram';
+export type NotificationChannelPreset = 'custom' | 'telegram' | 'wpush';
 export type TelegramParseMode = 'Markdown' | 'MarkdownV2' | 'HTML';
 
 export interface CustomWebhookChannelConfig {
@@ -469,6 +524,7 @@ export interface CustomWebhookChannelConfig {
   payload_type?: 'json' | 'param' | 'x-www-form-urlencoded';
   message_template?: string;
   payload_template?: unknown;
+  monitor_ids?: number[];
   enabled_events?: Array<
     | 'monitor.down'
     | 'monitor.up'
@@ -477,6 +533,8 @@ export interface CustomWebhookChannelConfig {
     | 'incident.resolved'
     | 'maintenance.started'
     | 'maintenance.ended'
+    | 'monitor.ssl.expiring'
+    | 'monitor.domain.expiring'
     | 'test.ping'
   >;
   signing?: {
@@ -496,12 +554,32 @@ export interface TelegramChannelConfig {
   timeout_ms?: number;
   message_template?: string;
   enabled_events?: CustomWebhookChannelConfig['enabled_events'];
+  monitor_ids?: number[];
   parse_mode?: TelegramParseMode;
   disable_notification?: boolean;
   protect_content?: boolean;
 }
+export interface WpushChannelConfig {
+  preset: 'wpush';
+  api_key?: string;
+  api_key_secret_ref?: string;
+  api_key_configured?: boolean;
+  api_key_source?: 'stored' | 'secret_ref';
+  channel: string;
+  option?: string;
+  url?: string;
+  timeout_ms?: number;
+  title_template?: string;
+  message_template?: string;
+  enabled_events?: CustomWebhookChannelConfig['enabled_events'];
+  monitor_ids?: number[];
+}
 
-export type WebhookChannelConfig = CustomWebhookChannelConfig | TelegramChannelConfig;
+
+export type WebhookChannelConfig =
+  | CustomWebhookChannelConfig
+  | TelegramChannelConfig
+  | WpushChannelConfig;
 
 export interface NotificationChannel {
   id: number;
@@ -525,14 +603,43 @@ export interface PatchNotificationChannelInput {
   is_active?: boolean;
 }
 
+export type NotificationChannelTestEventType =
+  | 'test.ping'
+  | 'monitor.down'
+  | 'monitor.up'
+  | 'monitor.ssl.expiring'
+  | 'monitor.domain.expiring';
+
 export interface NotificationChannelTestResult {
   event_key: string;
+  event_type: NotificationChannelTestEventType;
+  monitor_id: number | null;
+  skipped: boolean;
   delivery: {
     status: string;
     http_status: number | null;
     error: string | null;
     created_at: number;
   } | null;
+}
+
+export interface PublicGlobalpingRegionStatus {
+  location: string;
+  status: 'up' | 'down' | 'unknown';
+  latency_ms: number | null;
+  http_status: number | null;
+  error: string | null;
+}
+
+export interface PublicGlobalpingMonitorStatus {
+  monitor_id: number;
+  checked_at: number | null;
+  regions: PublicGlobalpingRegionStatus[];
+}
+
+export interface PublicGlobalpingStatusResponse {
+  generated_at: number;
+  monitors: PublicGlobalpingMonitorStatus[];
 }
 
 export interface PublicIncidentsResponse {

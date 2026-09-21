@@ -24,6 +24,8 @@ English | **[中文](README.zh-CN.md)**
 - **Edge-native** — Monitoring probes run from Cloudflare Workers; your status page is served from the CDN edge.
 - **One-click deploy** — Push to `main` and GitHub Actions handles everything: D1 migrations, Worker deployment, Pages build.
 - **Full-featured** — HTTP/TCP checks, incident management, maintenance windows, webhook notifications, admin dashboard.
+- **Extended monitoring in this fork** — optional Globalping multi-region HTTP probes, SSL/domain expiration checks, and WPush notifications.
+- **MCP management endpoint** — manage monitors, notification scopes, current status, and Globalping data through `/api/mcp`.
 
 ## Features
 
@@ -50,6 +52,8 @@ English | **[中文](README.zh-CN.md)**
 **Notifications**
 
 - Webhook notifications to Discord, Slack, ntfy, or any HTTP endpoint
+- Telegram preset (upstream) and WPush preset (this fork)
+- SSL certificate and domain expiration alert events with delivery deduplication
 - Customizable message & payload templates with magic variables
 - Optional HMAC-SHA256 signature verification
 - Idempotent delivery with deduplication
@@ -194,6 +198,8 @@ Default addresses:
 | [Deployment Guide](docs/deploy-github-actions.md) ([中文](docs/deploy-github-actions.zh-CN.md))            | Full GitHub Actions deployment walkthrough                 |
 | [Configuration Reference](docs/configuration-reference.md) ([中文](docs/configuration-reference.zh-CN.md)) | All configurable parameters (secrets, variables, settings) |
 | [Notification System](docs/notifications.md) ([中文](docs/notifications.zh-CN.md))                         | Webhook setup, templates, signatures, troubleshooting      |
+| [Extended Monitoring](docs/extended-monitoring.md)                                                         | Globalping, SSL/RDAP expiry checks, WPush, migration notes  |
+| [MCP](docs/mcp.md)                                                                                          | Remote MCP endpoint, authentication, tools and examples     |
 | [Local Development](Develop/LOCAL-TESTING.md)                                                              | Local setup, seed data, testing procedures                 |
 
 ## Quality Checks

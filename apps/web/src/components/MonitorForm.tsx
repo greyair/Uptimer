@@ -5,6 +5,7 @@ import type {
   CreateMonitorInput,
   HttpResponseMatchMode,
   MonitorType,
+  ProbeMode,
   PatchMonitorInput,
   StatusCodeRule,
 } from '../api/types';
@@ -355,6 +356,14 @@ export function MonitorForm(props: CreateProps | EditProps) {
   const [displayUrl, setDisplayUrl] = useState(monitor?.display_url ?? '');
   const [intervalSec, setIntervalSec] = useState(monitor?.interval_sec ?? 60);
   const [timeoutMs, setTimeoutMs] = useState(monitor?.timeout_ms ?? 10000);
+  const [probeMode, setProbeMode] = useState<ProbeMode>(monitor?.probe_mode ?? 'direct');
+  const [globalpingLocationsInput, setGlobalpingLocationsInput] = useState(
+    (monitor?.globalping_locations ?? []).join(', '),
+  );
+  const [sslCheckEnabled, setSslCheckEnabled] = useState(monitor?.ssl_check_enabled ?? false);
+  const [sslWarnDays, setSslWarnDays] = useState(monitor?.ssl_warn_days ?? 30);
+  const [domainName, setDomainName] = useState(monitor?.domain_name ?? '');
+  const [domainWarnDays, setDomainWarnDays] = useState(monitor?.domain_warn_days ?? 30);
 
   const [httpMethod, setHttpMethod] = useState<HttpMethod>(
     toHttpMethod(monitor?.http_method ?? 'GET'),
@@ -431,11 +440,30 @@ export function MonitorForm(props: CreateProps | EditProps) {
     [groupSortOrderInput],
   );
 
+  const globalpingLocations = useMemo(
+    () =>
+      globalpingLocationsInput
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    [globalpingLocationsInput],
+  );
+  const sslTargetValid = useMemo(() => {
+    if (!sslCheckEnabled || type !== 'http') return true;
+    try {
+      return new URL(target.trim()).protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, [sslCheckEnabled, target, type]);
+
   const canSubmit =
     name.trim().length > 0 &&
     target.trim().length > 0 &&
     displayUrlParse.ok &&
     groupSortOrderParse.ok &&
+    (type !== 'http' || probeMode !== 'globalping' || globalpingLocations.length > 0) &&
+    sslTargetValid &&
     (type !== 'http' ||
       !showAdvancedHttp ||
       (headersParse.ok &&
@@ -473,6 +501,12 @@ export function MonitorForm(props: CreateProps | EditProps) {
       }
 
       if (type === 'http') {
+        data.probe_mode = probeMode;
+        data.globalping_locations = probeMode === 'globalping' ? globalpingLocations : [];
+        data.ssl_check_enabled = sslCheckEnabled;
+        data.ssl_warn_days = sslWarnDays;
+        data.domain_name = domainName.trim().length > 0 ? domainName.trim().toLowerCase() : null;
+        data.domain_warn_days = domainWarnDays;
         data.http_method = httpMethod;
 
         if (showAdvancedHttp) {
@@ -524,6 +558,16 @@ export function MonitorForm(props: CreateProps | EditProps) {
     }
 
     if (type === 'http') {
+      data.probe_mode = probeMode;
+      if (probeMode === 'globalping') {
+        data.globalping_locations = globalpingLocations;
+      }
+      data.ssl_check_enabled = sslCheckEnabled;
+      data.ssl_warn_days = sslWarnDays;
+      if (domainName.trim().length > 0) {
+        data.domain_name = domainName.trim().toLowerCase();
+      }
+      data.domain_warn_days = domainWarnDays;
       data.http_method = httpMethod;
 
       if (showAdvancedHttp) {
@@ -743,7 +787,88 @@ export function MonitorForm(props: CreateProps | EditProps) {
       </div>
 
       {type === 'http' && (
-        <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+        <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-4">
+          <div>
+            <label className={labelClass}>{t('monitor_form.probe_mode')}</label>
+            <select
+              value={probeMode}
+              onChange={(e) => setProbeMode(e.target.value as ProbeMode)}
+              className={selectClass}
+            >
+              <option value="direct">{t('monitor_form.probe_mode_direct')}</option>
+              <option value="globalping">{t('monitor_form.probe_mode_globalping')}</option>
+            </select>
+            <div className={FIELD_HELP_CLASS}>{t('monitor_form.probe_mode_help')}</div>
+          </div>
+
+          {probeMode === 'globalping' && (
+            <div>
+              <label className={labelClass}>{t('monitor_form.globalping_locations')}</label>
+              <input
+                type="text"
+                value={globalpingLocationsInput}
+                onChange={(e) => setGlobalpingLocationsInput(e.target.value)}
+                className={inputClass}
+                placeholder={t('monitor_form.globalping_locations_placeholder')}
+              />
+              <div className={FIELD_HELP_CLASS}>{t('monitor_form.globalping_locations_help')}</div>
+            </div>
+          )}
+
+          <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700 space-y-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={sslCheckEnabled}
+                onChange={(e) => setSslCheckEnabled(e.target.checked)}
+              />
+              <span>{t('monitor_form.ssl_check_enabled')}</span>
+            </label>
+            {sslCheckEnabled && (
+              <div>
+                <label className={labelClass}>{t('monitor_form.expiry_warn_days')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={sslWarnDays}
+                  onChange={(e) => setSslWarnDays(Number(e.target.value))}
+                  className={inputClass}
+                />
+                {!sslTargetValid && (
+                  <div className="mt-1 text-xs text-red-600 dark:text-red-400">
+                    {t('monitor_form.ssl_https_required')}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>{t('monitor_form.domain_name_optional')}</label>
+                <input
+                  type="text"
+                  value={domainName}
+                  onChange={(e) => setDomainName(e.target.value)}
+                  className={inputClass}
+                  placeholder="example.com"
+                />
+                <div className={FIELD_HELP_CLASS}>{t('monitor_form.domain_name_help')}</div>
+              </div>
+              <div>
+                <label className={labelClass}>{t('monitor_form.domain_warn_days')}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={domainWarnDays}
+                  onChange={(e) => setDomainWarnDays(Number(e.target.value))}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+          </div>
+
           <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"

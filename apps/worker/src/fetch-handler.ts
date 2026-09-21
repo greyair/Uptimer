@@ -220,10 +220,12 @@ function isPublicUiPath(url: URL): boolean {
   if (pathname === '/api/v1/public/status') return true;
   if (pathname === '/api/v1/public/incidents') return true;
   if (pathname === '/api/v1/public/maintenance-windows') return true;
+  if (pathname === '/api/v1/public/globalping-status') return true;
   if (pathname === '/api/v1/public/analytics/uptime') return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/day-context$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/outages$/.test(pathname)) return true;
   if (/^\/api\/v1\/public\/monitors\/\d+\/uptime$/.test(pathname)) return true;
+  if (/^\/api\/v1\/public\/monitors\/\d+\/globalping-history$/.test(pathname)) return true;
   return /^\/api\/v1\/public\/monitors\/\d+\/latency$/.test(pathname) && url.searchParams.has('format');
 }
 
@@ -711,6 +713,12 @@ export async function handleFetch(request: Request, env: Env, ctx: ExecutionCont
 
   if (url.pathname === '/') {
     return new Response('ok');
+  }
+
+  if (url.pathname === '/api/mcp' || url.pathname === '/api/v1/mcp') {
+    const { handleMcpRequest } = await import('./mcp/handler');
+    const response = await handleMcpRequest(normalizedRequest, env, ctx);
+    return applyCorsHeaders(response, origin, 'POST, OPTIONS');
   }
 
   if (resolvedApiPath) {

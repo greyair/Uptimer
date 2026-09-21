@@ -6,7 +6,9 @@ import { useI18n } from '../app/I18nContext';
 import { useApplyServerLocaleSetting } from '../app/useApplyServerLocaleSetting';
 import {
   fetchLatency,
+  fetchGlobalpingHistory,
   fetchHomepage,
+  fetchPublicGlobalpingStatus,
   fetchPublicDayContext,
   fetchPublicIncidentDetail,
   fetchPublicMonitorOutages,
@@ -68,11 +70,16 @@ function monitorGroupLabel(groupName: string | null | undefined, ungroupedLabel:
   return trimmed.length > 0 ? trimmed : ungroupedLabel;
 }
 
-function MonitorDetail({ monitorId, onClose }: { monitorId: number; onClose: () => void }) {
+function MonitorDetail({ monitorId, isGlobalping, onClose }: { monitorId: number; isGlobalping: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
     queryKey: ['latency', monitorId],
     queryFn: () => fetchLatency(monitorId),
+  });
+  const globalpingHistoryQuery = useQuery({
+    queryKey: ['globalping-history', monitorId],
+    queryFn: () => fetchGlobalpingHistory(monitorId),
+    enabled: isGlobalping,
   });
 
   return (
@@ -133,6 +140,41 @@ function MonitorDetail({ monitorId, onClose }: { monitorId: number; onClose: () 
             >
               <LatencyChart points={data.points} />
             </Suspense>
+
+            {isGlobalping && (
+              <div className="mt-6 border-t border-slate-200 pt-5 dark:border-slate-700">
+                <div className="mb-3 text-sm font-medium text-slate-900 dark:text-slate-100">
+                  {t('status_page.globalping_region_history')}
+                </div>
+                {globalpingHistoryQuery.isLoading ? (
+                  <div className="py-6 text-sm text-slate-500 dark:text-slate-400">
+                    {t('common.loading')}
+                  </div>
+                ) : globalpingHistoryQuery.data?.regions.length ? (
+                  <div className="space-y-5">
+                    {globalpingHistoryQuery.data.regions.map((region) => (
+                      <div key={region.location}>
+                        <div className="mb-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+                          {region.location}
+                        </div>
+                        <LatencyChart
+                          height={140}
+                          points={region.points.map((point) => ({
+                            checked_at: point.checked_at,
+                            status: point.status,
+                            latency_ms: point.latency_ms,
+                          }))}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-6 text-sm text-slate-500 dark:text-slate-400">
+                    {t('status_page.globalping_no_history')}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <div className="h-[200px] flex items-center justify-center text-slate-500 dark:text-slate-400">
@@ -382,6 +424,24 @@ export function StatusPage() {
       return Date.now() - data.generated_at * 1000 > 60_000;
     },
   });
+
+  const globalpingStatusQuery = useQuery({
+    queryKey: ['public-globalping-status'],
+    queryFn: fetchPublicGlobalpingStatus,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+
+  const globalpingRegionsByMonitor = useMemo(
+    () =>
+      new Map(
+        (globalpingStatusQuery.data?.monitors ?? []).map((item) => [
+          item.monitor_id,
+          item.regions,
+        ] as const),
+      ),
+    [globalpingStatusQuery.data?.monitors],
+  );
 
   const derivedTitle = homepageQuery.data?.site_title || 'Uptimer';
   const derivedTimeZone = getBrowserTimeZone() || homepageQuery.data?.site_timezone || 'UTC';
@@ -688,6 +748,7 @@ export function StatusPage() {
                       onDayClick={(dayStartAt) =>
                         setSelectedDay({ monitorId: monitor.id, dayStartAt })
                       }
+                      regionStatuses={globalpingRegionsByMonitor.get(monitor.id)}
                     />
                   ))}
                 </div>
@@ -785,7 +846,11 @@ export function StatusPage() {
 
       {/* Modals */}
       {selectedMonitorId !== null && (
-        <MonitorDetail monitorId={selectedMonitorId} onClose={() => setSelectedMonitorId(null)} />
+        <MonitorDetail
+          monitorId={selectedMonitorId}
+          isGlobalping={globalpingRegionsByMonitor.has(selectedMonitorId)}
+          onClose={() => setSelectedMonitorId(null)}
+        />
       )}
 
       {selectedIncident && (

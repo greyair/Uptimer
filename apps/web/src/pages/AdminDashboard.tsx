@@ -40,6 +40,7 @@ import type {
   Incident,
   MaintenanceWindow,
   NotificationChannel,
+  NotificationChannelTestEventType,
   StatusResponse,
 } from '../api/types';
 import { IncidentForm } from '../components/IncidentForm';
@@ -92,8 +93,16 @@ type ChannelTestFeedback = {
   at: number;
   channelId: number;
   eventKey: Awaited<ReturnType<typeof testNotificationChannel>>['event_key'];
+  eventType: Awaited<ReturnType<typeof testNotificationChannel>>['event_type'];
+  monitorId: Awaited<ReturnType<typeof testNotificationChannel>>['monitor_id'];
+  skipped: Awaited<ReturnType<typeof testNotificationChannel>>['skipped'];
   delivery: Awaited<ReturnType<typeof testNotificationChannel>>['delivery'];
 };
+
+function daysUntilUnix(unixSeconds: number | null): number | null {
+  if (unixSeconds === null) return null;
+  return Math.ceil((unixSeconds * 1000 - Date.now()) / 86_400_000);
+}
 
 type ChannelTestErrorState = {
   channelId: number;
@@ -301,6 +310,9 @@ export function AdminDashboard() {
   const [monitorTestError, setMonitorTestError] = useState<MonitorTestErrorState | null>(null);
   const [channelTestFeedback, setChannelTestFeedback] = useState<ChannelTestFeedback | null>(null);
   const [channelTestError, setChannelTestError] = useState<ChannelTestErrorState | null>(null);
+  const [channelTestEventType, setChannelTestEventType] =
+    useState<NotificationChannelTestEventType>('test.ping');
+  const [channelTestMonitorId, setChannelTestMonitorId] = useState<number | null>(null);
   const [monitorGroupReorderError, setMonitorGroupReorderError] = useState<string | null>(null);
   const [monitorGroupManageError, setMonitorGroupManageError] = useState<string | null>(null);
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<number[]>([]);
@@ -574,19 +586,34 @@ export function AdminDashboard() {
     },
   });
   const testChannelMut = useMutation({
-    mutationFn: testNotificationChannel,
-    onSuccess: (data, channelId) => {
+    mutationFn: ({
+      channelId,
+      eventType,
+      monitorId,
+    }: {
+      channelId: number;
+      eventType: NotificationChannelTestEventType;
+      monitorId: number | null;
+    }) =>
+      testNotificationChannel(channelId, {
+        event_type: eventType,
+        ...(eventType !== 'test.ping' && monitorId ? { monitor_id: monitorId } : {}),
+      }),
+    onSuccess: (data, vars) => {
       setChannelTestFeedback({
         at: Math.floor(Date.now() / 1000),
-        channelId,
+        channelId: vars.channelId,
         eventKey: data.event_key,
+        eventType: data.event_type,
+        monitorId: data.monitor_id,
+        skipped: data.skipped,
         delivery: data.delivery,
       });
       setChannelTestError(null);
     },
-    onError: (err, channelId) => {
+    onError: (err, vars) => {
       setChannelTestError({
-        channelId,
+        channelId: vars.channelId,
         at: Math.floor(Date.now() / 1000),
         message: formatError(err) ?? t('admin_dashboard.webhook_test_failed_default'),
       });
@@ -1088,6 +1115,48 @@ export function AdminDashboard() {
                     })}
                   </span>
                 </div>
+                {monitorTestFeedback.result.region_results &&
+                  monitorTestFeedback.result.region_results.length > 0 && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {monitorTestFeedback.result.region_results.map((region) => (
+                        <div
+                          key={region.location}
+                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium text-slate-700 dark:text-slate-200">
+                              {region.location}
+                            </span>
+                            <Badge
+                              variant={
+                                region.status === 'up'
+                                  ? 'up'
+                                  : region.status === 'down'
+                                    ? 'down'
+                                    : 'unknown'
+                              }
+                            >
+                              {statusLabel(region.status, t)}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                            <span>
+                              HTTP {region.httpStatus !== null ? region.httpStatus : '-'}
+                            </span>
+                            <span>
+                              {region.latencyMs !== null ? `${region.latencyMs}ms` : '-'}
+                            </span>
+                          </div>
+                          {region.error && (
+                            <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                              {region.error}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                 <div
                   className={`mt-2 text-sm ${
                     monitorTestFeedback.result.error
@@ -1463,6 +1532,8 @@ export function AdminDashboard() {
                               const showGroupHeader =
                                 monitorGroupMode === 'grouped' && groupLabel !== prevGroupLabel;
                               const groupMeta = monitorGroupMetaByLabel.get(groupLabel);
+                              const sslDaysRemaining = daysUntilUnix(m.ssl_expires_at);
+                              const domainDaysRemaining = daysUntilUnix(m.domain_expires_at);
 
                               return (
                                 <Fragment key={m.id}>
@@ -1536,6 +1607,53 @@ export function AdminDashboard() {
                                           {t('common.display_url')}: {m.display_url}
                                         </a>
                                       )}
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {m.probe_mode === 'globalping' && (
+                                          <Badge variant="info">
+                                            {t('admin_dashboard.monitor_probe_globalping', {
+                                              count: m.globalping_locations.length,
+                                            })}
+                                          </Badge>
+                                        )}
+                                        {m.ssl_check_enabled && (
+                                          <Badge
+                                            variant={
+                                              m.ssl_error ||
+                                              (sslDaysRemaining !== null &&
+                                                sslDaysRemaining <= m.ssl_warn_days)
+                                                ? 'down'
+                                                : 'up'
+                                            }
+                                          >
+                                            {m.ssl_error
+                                              ? t('admin_dashboard.monitor_ssl_error')
+                                              : sslDaysRemaining === null
+                                                ? t('admin_dashboard.monitor_ssl_pending')
+                                                : t('admin_dashboard.monitor_ssl_days', {
+                                                    count: sslDaysRemaining,
+                                                  })}
+                                          </Badge>
+                                        )}
+                                        {m.domain_name && (
+                                          <Badge
+                                            variant={
+                                              m.domain_error ||
+                                              (domainDaysRemaining !== null &&
+                                                domainDaysRemaining <= m.domain_warn_days)
+                                                ? 'down'
+                                                : 'up'
+                                            }
+                                          >
+                                            {m.domain_error
+                                              ? t('admin_dashboard.monitor_domain_error')
+                                              : domainDaysRemaining === null
+                                                ? t('admin_dashboard.monitor_domain_pending')
+                                                : t('admin_dashboard.monitor_domain_days', {
+                                                    count: domainDaysRemaining,
+                                                  })}
+                                          </Badge>
+                                        )}
+                                      </div>
                                     </td>
                                     <td className="px-3 sm:px-4 py-3">
                                       <div className="flex items-center gap-2">
@@ -1675,6 +1793,51 @@ export function AdminDashboard() {
                 {t('admin_dashboard.create_channel')}
               </Button>
             </div>
+            <Card className="p-3 sm:p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
+                    {t('admin_dashboard.webhook_test_event')}
+                  </label>
+                  <select
+                    value={channelTestEventType}
+                    onChange={(e) =>
+                      setChannelTestEventType(e.target.value as NotificationChannelTestEventType)
+                    }
+                    className="ui-select w-full"
+                  >
+                    <option value="test.ping">test.ping</option>
+                    <option value="monitor.down">monitor.down</option>
+                    <option value="monitor.up">monitor.up</option>
+                    <option value="monitor.ssl.expiring">monitor.ssl.expiring</option>
+                    <option value="monitor.domain.expiring">monitor.domain.expiring</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
+                    {t('admin_dashboard.webhook_test_monitor')}
+                  </label>
+                  <select
+                    value={channelTestMonitorId ?? ''}
+                    onChange={(e) =>
+                      setChannelTestMonitorId(e.target.value ? Number(e.target.value) : null)
+                    }
+                    disabled={channelTestEventType === 'test.ping'}
+                    className="ui-select w-full disabled:opacity-50"
+                  >
+                    <option value="">{t('admin_dashboard.webhook_test_monitor_none')}</option>
+                    {(monitorsQuery.data?.monitors ?? []).map((monitor) => (
+                      <option key={monitor.id} value={monitor.id}>
+                        {formatMonitorDisplayName(monitor)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                {t('admin_dashboard.webhook_test_scope_help')}
+              </div>
+            </Card>
             {testingChannelId !== null && (
               <Card className="p-3 border-blue-200 bg-blue-50/70 dark:bg-blue-500/10 dark:border-blue-400/30">
                 <div className="text-sm text-blue-700 dark:text-blue-300">
@@ -1697,24 +1860,37 @@ export function AdminDashboard() {
                   </div>
                   <Badge
                     variant={
-                      channelTestFeedback.delivery?.status === 'success'
-                        ? 'up'
-                        : channelTestFeedback.delivery?.status === 'failed'
-                          ? 'down'
-                          : 'unknown'
+                      channelTestFeedback.skipped
+                        ? 'unknown'
+                        : channelTestFeedback.delivery?.status === 'success'
+                          ? 'up'
+                          : channelTestFeedback.delivery?.status === 'failed'
+                            ? 'down'
+                            : 'unknown'
                     }
                   >
-                    {channelTestFeedback.delivery?.status === 'success'
-                      ? t('admin_dashboard.webhook_test_status_success')
-                      : channelTestFeedback.delivery?.status === 'failed'
-                        ? t('admin_dashboard.webhook_test_status_failed')
-                        : t('admin_dashboard.webhook_test_unknown')}
+                    {channelTestFeedback.skipped
+                      ? t('admin_dashboard.webhook_test_status_skipped')
+                      : channelTestFeedback.delivery?.status === 'success'
+                        ? t('admin_dashboard.webhook_test_status_success')
+                        : channelTestFeedback.delivery?.status === 'failed'
+                          ? t('admin_dashboard.webhook_test_status_failed')
+                          : t('admin_dashboard.webhook_test_unknown')}
                   </Badge>
                 </div>
                 <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {formatDateTime(channelTestFeedback.at, settings?.site_timezone)}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                  <span>{channelTestFeedback.eventType}</span>
+                  {channelTestFeedback.monitorId !== null && (
+                    <span>
+                      {formatMonitorDisplayNameById(
+                        channelTestFeedback.monitorId,
+                        monitorNameById,
+                      )}
+                    </span>
+                  )}
                   <span>
                     {t('admin_dashboard.webhook_test_http', {
                       value: channelTestFeedback.delivery?.http_status ?? '-',
@@ -1733,11 +1909,13 @@ export function AdminDashboard() {
                       : 'text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {channelTestFeedback.delivery?.error
-                    ? channelTestFeedback.delivery.error
-                    : channelTestFeedback.delivery
-                      ? t('admin_dashboard.webhook_delivery_success')
-                      : t('admin_dashboard.webhook_delivery_missing')}
+                  {channelTestFeedback.skipped
+                    ? t('admin_dashboard.webhook_test_skipped_scope')
+                    : channelTestFeedback.delivery?.error
+                      ? channelTestFeedback.delivery.error
+                      : channelTestFeedback.delivery
+                        ? t('admin_dashboard.webhook_delivery_success')
+                        : t('admin_dashboard.webhook_delivery_missing')}
                 </div>
               </Card>
             )}
@@ -1814,7 +1992,11 @@ export function AdminDashboard() {
                                   setTestingChannelId(ch.id);
                                   setChannelTestFeedback(null);
                                   setChannelTestError(null);
-                                  testChannelMut.mutate(ch.id);
+                                  testChannelMut.mutate({
+                                    channelId: ch.id,
+                                    eventType: channelTestEventType,
+                                    monitorId: channelTestMonitorId,
+                                  });
                                 }}
                                 disabled={testChannelMut.isPending}
                                 className={cn(
@@ -2531,6 +2713,10 @@ export function AdminDashboard() {
                     ? formatError(updateChannelMut.error)
                     : formatError(createChannelMut.error)
                 }
+                monitors={(monitorsQuery.data?.monitors ?? []).map((monitor) => ({
+                  id: monitor.id,
+                  name: formatMonitorDisplayName(monitor),
+                }))}
               />
             )}
             {modal.type === 'create-incident' && (

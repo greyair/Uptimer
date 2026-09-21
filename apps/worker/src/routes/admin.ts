@@ -16,6 +16,7 @@ import {
   serializeDbJson,
   serializeDbJsonNullable,
   type TelegramChannelConfig,
+  type WpushChannelConfig,
   type WebhookChannelConfig,
   webhookChannelConfigSchema,
 } from '@uptimer/db';
@@ -33,6 +34,13 @@ import {
 } from '../public/homepage-guard-state';
 import { refreshPublicHomepageSnapshotIfNeeded } from '../snapshots';
 import { runHttpCheck } from '../monitor/http';
+import { runGlobalpingHttpCheck } from '../monitor/globalping';
+import {
+  getMonitorExtension,
+  listMonitorExtensions,
+  upsertMonitorExtension,
+  type MonitorExtensionConfig,
+} from '../monitor/extensions';
 import {
   validateHttpResponseAssertionConfig,
   type HttpResponseMatchMode,
@@ -40,11 +48,12 @@ import {
 import { validateHttpTarget, validateTcpTarget } from '../monitor/targets';
 import { runTcpCheck } from '../monitor/tcp';
 import {
-  dispatchWebhookToChannelLegacy,
+  dispatchWebhookToChannel,
   dispatchWebhookToChannels,
   type WebhookChannel,
 } from '../notify/webhook';
 import { encryptTelegramBotToken } from '../notify/telegram-token';
+import { encryptWpushApiKey } from '../notify/wpush-token';
 import { adminAnalyticsRoutes } from './admin-analytics';
 import { adminExportsRoutes } from './admin-exports';
 import { adminSettingsRoutes } from './admin-settings';
@@ -68,6 +77,8 @@ import {
   patchNotificationChannelInputSchema,
   type TelegramChannelCreateInput,
   type TelegramChannelPatchInput,
+  type WpushChannelCreateInput,
+  type WpushChannelPatchInput,
 } from '../schemas/notification-channels';
 
 export const adminRoutes = new Hono<{ Bindings: Env }>();
@@ -260,6 +271,7 @@ function buildGroupReorderUpdate(
 function monitorRowToApi(
   row: typeof monitors.$inferSelect,
   state?: typeof monitorState.$inferSelect | null,
+  extension?: MonitorExtensionConfig,
 ) {
   const groupName = normalizeMonitorGroupName(row.groupName);
 
@@ -295,6 +307,19 @@ function monitorRowToApi(
     created_at: row.createdAt,
     updated_at: row.updatedAt,
 
+    probe_mode: extension?.probeMode ?? 'direct',
+    globalping_locations: extension?.globalpingLocations ?? [],
+    ssl_check_enabled: extension?.sslCheckEnabled ?? false,
+    ssl_warn_days: extension?.sslWarnDays ?? 30,
+    ssl_last_checked_at: extension?.sslLastCheckedAt ?? null,
+    ssl_expires_at: extension?.sslExpiresAt ?? null,
+    ssl_error: extension?.sslError ?? null,
+    domain_name: extension?.domainName ?? null,
+    domain_warn_days: extension?.domainWarnDays ?? 30,
+    domain_last_checked_at: extension?.domainLastCheckedAt ?? null,
+    domain_expires_at: extension?.domainExpiresAt ?? null,
+    domain_error: extension?.domainError ?? null,
+
     // Runtime state (denormalized from monitor_state for admin list).
     status: state?.status ?? 'unknown',
     last_checked_at: state?.lastCheckedAt ?? null,
@@ -327,7 +352,16 @@ adminRoutes.get('/monitors', async (c) => {
     .limit(limit)
     .all();
 
-  return c.json({ monitors: rows.map((r) => monitorRowToApi(r.monitor, r.state)) });
+  const extensions = await listMonitorExtensions(
+    c.env.DB,
+    rows.map((row) => row.monitor.id),
+  );
+
+  return c.json({
+    monitors: rows.map((r) =>
+      monitorRowToApi(r.monitor, r.state, extensions.get(r.monitor.id)),
+    ),
+  });
 });
 
 adminRoutes.post('/monitors/groups/reorder', async (c) => {
@@ -505,10 +539,26 @@ adminRoutes.post('/monitors', async (c) => {
     await syncGroupSortOrder(c.env.DB, groupName, groupSortOrder, now, inserted.id);
   }
 
+  const extension = await upsertMonitorExtension(
+    c.env.DB,
+    inserted.id,
+    {
+      probeMode: input.probe_mode,
+      ...(input.globalping_locations !== undefined
+        ? { globalpingLocations: input.globalping_locations }
+        : {}),
+      sslCheckEnabled: input.ssl_check_enabled,
+      sslWarnDays: input.ssl_warn_days,
+      domainName: input.domain_name,
+      domainWarnDays: input.domain_warn_days,
+    },
+    now,
+  );
+
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(inserted, null) }, 201);
+  return c.json({ monitor: monitorRowToApi(inserted, null, extension) }, 201);
 });
 
 adminRoutes.patch('/monitors/:id', async (c) => {
@@ -524,6 +574,44 @@ adminRoutes.patch('/monitors/:id', async (c) => {
 
   if (!existing) {
     throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
+  }
+
+  const existingExtension = await getMonitorExtension(c.env.DB, id);
+  const nextProbeMode = input.probe_mode ?? existingExtension.probeMode;
+  const nextGlobalpingLocations =
+    input.globalping_locations !== undefined
+      ? (input.globalping_locations ?? [])
+      : existingExtension.globalpingLocations;
+  const nextSslCheckEnabled = input.ssl_check_enabled ?? existingExtension.sslCheckEnabled;
+  const nextTarget = input.target ?? existing.target;
+
+  if (existing.type !== 'http' && nextProbeMode === 'globalping') {
+    throw new AppError(
+      400,
+      'INVALID_ARGUMENT',
+      'globalping probe mode is currently supported only for http monitors',
+    );
+  }
+  if (nextProbeMode === 'globalping' && nextGlobalpingLocations.length === 0) {
+    throw new AppError(
+      400,
+      'INVALID_ARGUMENT',
+      'globalping_locations is required when probe_mode is globalping',
+    );
+  }
+  if (nextSslCheckEnabled) {
+    try {
+      if (existing.type !== 'http' || new URL(nextTarget).protocol !== 'https:') {
+        throw new AppError(
+          400,
+          'INVALID_ARGUMENT',
+          'SSL certificate checks require an https monitor target',
+        );
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError(400, 'INVALID_ARGUMENT', 'SSL certificate checks require an https target');
+    }
   }
 
   // Validate target if being updated
@@ -648,10 +736,26 @@ adminRoutes.patch('/monitors/:id', async (c) => {
     await syncGroupSortOrder(c.env.DB, nextGroupName, nextGroupSortOrder, now, updated.id);
   }
 
+  const extension = await upsertMonitorExtension(
+    c.env.DB,
+    updated.id,
+    {
+      probeMode: input.probe_mode,
+      ...(input.globalping_locations !== undefined
+        ? { globalpingLocations: input.globalping_locations ?? [] }
+        : {}),
+      sslCheckEnabled: input.ssl_check_enabled,
+      sslWarnDays: input.ssl_warn_days,
+      domainName: input.domain_name,
+      domainWarnDays: input.domain_warn_days,
+    },
+    now,
+  );
+
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(updated, null) });
+  return c.json({ monitor: monitorRowToApi(updated, null, extension) });
 });
 
 adminRoutes.delete('/monitors/:id', async (c) => {
@@ -674,6 +778,7 @@ adminRoutes.delete('/monitors/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM monitor_daily_rollups WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM maintenance_window_monitors WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM incident_monitors WHERE monitor_id = ?1').bind(id),
+    c.env.DB.prepare('DELETE FROM monitor_extensions WHERE monitor_id = ?1').bind(id),
     c.env.DB.prepare('DELETE FROM monitors WHERE id = ?1').bind(id),
   ]);
 
@@ -693,9 +798,11 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
     throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
   }
 
+  const extension = await getMonitorExtension(c.env.DB, monitor.id);
   let outcome;
+  let regionResults: unknown[] | undefined;
   if (monitor.type === 'http') {
-    outcome = await runHttpCheck({
+    const httpConfig = {
       url: monitor.target,
       timeoutMs: monitor.timeoutMs,
       method: (monitor.httpMethod as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD') ?? 'GET',
@@ -714,7 +821,20 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
       responseKeywordMode: monitor.responseKeywordMode,
       responseForbiddenKeyword: monitor.responseForbiddenKeyword,
       responseForbiddenKeywordMode: monitor.responseForbiddenKeywordMode,
-    });
+    };
+
+    if (extension.probeMode === 'globalping') {
+      const globalpingResult = await runGlobalpingHttpCheck({
+        ...httpConfig,
+        body: monitor.httpBody,
+        locations: extension.globalpingLocations,
+        apiToken: c.env.GLOBALPING_API_TOKEN ?? null,
+      });
+      outcome = globalpingResult;
+      regionResults = globalpingResult.regionResults;
+    } else {
+      outcome = await runHttpCheck(httpConfig);
+    }
   } else {
     outcome = await runTcpCheck({
       target: monitor.target,
@@ -730,6 +850,8 @@ adminRoutes.post('/monitors/:id/test', async (c) => {
       http_status: outcome.httpStatus,
       error: outcome.error,
       attempts: outcome.attempts,
+      location: outcome.location ?? null,
+      ...(regionResults ? { region_results: regionResults } : {}),
     },
   });
 });
@@ -785,7 +907,8 @@ adminRoutes.post('/monitors/:id/pause', async (c) => {
   await bumpHomepageMonitorGuardVersions(c.env.DB);
   queuePublicHomepageSnapshotRefresh(c);
 
-  return c.json({ monitor: monitorRowToApi(monitor, state ?? null) });
+  const extension = await getMonitorExtension(c.env.DB, monitor.id);
+  return c.json({ monitor: monitorRowToApi(monitor, state ?? null, extension) });
 });
 
 adminRoutes.post('/monitors/:id/resume', async (c) => {
@@ -843,14 +966,24 @@ type NotificationChannelRow = {
 type NotificationChannelInputConfig =
   | CustomWebhookChannelConfig
   | TelegramChannelCreateInput
-  | TelegramChannelPatchInput;
+  | TelegramChannelPatchInput
+  | WpushChannelCreateInput
+  | WpushChannelPatchInput;
 
 type TelegramApiChannelConfig = Omit<TelegramChannelConfig, 'bot_token_encrypted'> & {
   bot_token_configured: boolean;
   bot_token_source: 'stored' | 'secret_ref';
 };
 
-type NotificationChannelApiConfig = CustomWebhookChannelConfig | TelegramApiChannelConfig;
+type WpushApiChannelConfig = Omit<WpushChannelConfig, 'api_key_encrypted'> & {
+  api_key_configured: boolean;
+  api_key_source: 'stored' | 'secret_ref';
+};
+
+type NotificationChannelApiConfig =
+  | CustomWebhookChannelConfig
+  | TelegramApiChannelConfig
+  | WpushApiChannelConfig;
 
 function isTelegramInputConfig(
   config: NotificationChannelInputConfig,
@@ -864,11 +997,62 @@ function isTelegramStoredConfig(
   return config?.preset === 'telegram';
 }
 
+function isWpushInputConfig(
+  config: NotificationChannelInputConfig,
+): config is WpushChannelCreateInput | WpushChannelPatchInput {
+  return config.preset === 'wpush';
+}
+
+function isWpushStoredConfig(
+  config: WebhookChannelConfig | undefined,
+): config is WpushChannelConfig {
+  return config?.preset === 'wpush';
+}
+
 async function normalizeNotificationConfigForStorage(
   env: Env,
   inputConfig: NotificationChannelInputConfig,
   existingConfig?: WebhookChannelConfig,
 ): Promise<WebhookChannelConfig> {
+  if (isWpushInputConfig(inputConfig)) {
+    const { api_key: apiKey, api_key_secret_ref: apiKeySecretRef, ...wpushConfig } = inputConfig;
+    const baseWpushConfig = isWpushStoredConfig(existingConfig) ? existingConfig : undefined;
+
+    if (apiKey) {
+      const adminToken = env.ADMIN_TOKEN?.trim();
+      if (!adminToken) {
+        throw new AppError(500, 'INTERNAL', 'Admin token not configured');
+      }
+      return {
+        ...wpushConfig,
+        api_key_encrypted: await encryptWpushApiKey(adminToken, apiKey),
+      };
+    }
+
+    if (apiKeySecretRef) {
+      return {
+        ...wpushConfig,
+        api_key_secret_ref: apiKeySecretRef,
+      };
+    }
+
+    if (baseWpushConfig?.api_key_encrypted) {
+      return {
+        ...wpushConfig,
+        api_key_encrypted: baseWpushConfig.api_key_encrypted,
+      };
+    }
+
+    if (baseWpushConfig?.api_key_secret_ref) {
+      return {
+        ...wpushConfig,
+        api_key_secret_ref: baseWpushConfig.api_key_secret_ref,
+      };
+    }
+
+    throw new AppError(400, 'INVALID_ARGUMENT', 'WPush API key is required');
+  }
+
   if (!isTelegramInputConfig(inputConfig)) {
     return inputConfig;
   }
@@ -919,6 +1103,15 @@ async function normalizeNotificationConfigForStorage(
 function sanitizeNotificationConfigForApi(
   config: WebhookChannelConfig,
 ): NotificationChannelApiConfig {
+  if (isWpushStoredConfig(config)) {
+    const { api_key_encrypted: encryptedKey, ...wpushConfig } = config;
+    return {
+      ...wpushConfig,
+      api_key_configured: Boolean(encryptedKey || wpushConfig.api_key_secret_ref),
+      api_key_source: wpushConfig.api_key_secret_ref ? 'secret_ref' : 'stored',
+    };
+  }
+
   if (!isTelegramStoredConfig(config)) {
     return config;
   }
@@ -1352,6 +1545,23 @@ async function listMaintenanceWindowMonitorIdsByWindowId(
 adminRoutes.post('/notification-channels/:id/test', async (c) => {
   const id = z.coerce.number().int().positive().parse(c.req.param('id'));
 
+  const rawBody = await c.req.json().catch(() => ({}));
+  const testInput = z
+    .object({
+      event_type: z
+        .enum([
+          'test.ping',
+          'monitor.down',
+          'monitor.up',
+          'monitor.ssl.expiring',
+          'monitor.domain.expiring',
+        ])
+        .optional()
+        .default('test.ping'),
+      monitor_id: z.number().int().positive().optional(),
+    })
+    .parse(rawBody);
+
   const channelRow = await c.env.DB.prepare(
     `
       SELECT id, name, type, config_json, is_active, created_at
@@ -1372,20 +1582,92 @@ adminRoutes.post('/notification-channels/:id/test', async (c) => {
   const channel = { id: channelRow.id, name: channelRow.name, config };
 
   const now = Math.floor(Date.now() / 1000);
-  const eventKey = `test:webhook:${id}:${now}`;
-  const payload = {
-    event: 'test.ping',
-    event_id: eventKey,
-    timestamp: now,
-    // Provide representative fields so templates can be validated via the test button.
-    monitor: { id: 0, name: 'Example monitor', type: 'http', target: 'https://example.com/health' },
-    state: { status: 'up', latency_ms: 123, http_status: 200, error: null, location: null },
-  };
+  const eventType = testInput.event_type;
 
-  await dispatchWebhookToChannelLegacy({
+  let monitor:
+    | {
+        id: number;
+        name: string;
+        type: string;
+        target: string;
+        display_url: string | null;
+      }
+    | null = null;
+
+  if (eventType !== 'test.ping') {
+    if (!testInput.monitor_id) {
+      throw new AppError(400, 'INVALID_ARGUMENT', 'monitor_id is required for monitor event tests');
+    }
+
+    monitor = await c.env.DB.prepare(
+      `
+        SELECT id, name, type, target, display_url
+        FROM monitors
+        WHERE id = ?1
+      `,
+    )
+      .bind(testInput.monitor_id)
+      .first<{
+        id: number;
+        name: string;
+        type: string;
+        target: string;
+        display_url: string | null;
+      }>();
+
+    if (!monitor) {
+      throw new AppError(404, 'NOT_FOUND', 'Monitor not found');
+    }
+  }
+
+  const eventKey = `test:webhook:${id}:${eventType}:${monitor?.id ?? 0}:${now}`;
+  const payload =
+    eventType === 'test.ping'
+      ? {
+          event: eventType,
+          event_id: eventKey,
+          timestamp: now,
+          monitor: {
+            id: 0,
+            name: 'Example monitor',
+            type: 'http',
+            target: 'https://example.com/health',
+          },
+          state: { status: 'up', latency_ms: 123, http_status: 200, error: null, location: null },
+        }
+      : eventType === 'monitor.ssl.expiring' || eventType === 'monitor.domain.expiring'
+        ? {
+            event: eventType,
+            event_id: eventKey,
+            timestamp: now,
+            monitor,
+            expiry: {
+              kind: eventType === 'monitor.ssl.expiring' ? 'ssl' : 'domain',
+              subject: monitor?.target ?? '',
+              expires_at: now + 7 * 86400,
+              warn_days: 30,
+              days_remaining: 7,
+            },
+          }
+        : {
+            event: eventType,
+            event_id: eventKey,
+            timestamp: now,
+            monitor,
+            state: {
+              status: eventType === 'monitor.down' ? 'down' : 'up',
+              latency_ms: 123,
+              http_status: 200,
+              error: eventType === 'monitor.down' ? 'Simulated test failure' : null,
+              location: null,
+            },
+          };
+
+  const dispatchResult = await dispatchWebhookToChannel({
     db: c.env.DB,
     env: c.env as unknown as Record<string, unknown>,
     channel,
+    eventType,
     eventKey,
     payload,
   });
@@ -1402,6 +1684,9 @@ adminRoutes.post('/notification-channels/:id/test', async (c) => {
 
   return c.json({
     event_key: eventKey,
+    event_type: eventType,
+    monitor_id: monitor?.id ?? null,
+    skipped: dispatchResult === 'skipped',
     delivery: delivery
       ? {
           status: delivery.status,

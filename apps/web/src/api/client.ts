@@ -18,6 +18,7 @@ import type {
   IncidentUpdate,
   NotificationChannel,
   NotificationChannelTestResult,
+  NotificationChannelTestEventType,
   PatchMaintenanceWindowInput,
   PatchMonitorInput,
   PatchNotificationChannelInput,
@@ -34,6 +35,8 @@ import type {
   MonitorAnalyticsResponse,
   MonitorOutagesResponse,
   PublicHomepageResponse,
+  PublicGlobalpingStatusResponse,
+  GlobalpingHistoryResponse,
   UptimeResponse,
 } from './types';
 
@@ -294,6 +297,35 @@ export async function fetchHomepage(): Promise<PublicHomepageResponse> {
   }
 }
 
+export async function fetchPublicGlobalpingStatus(): Promise<PublicGlobalpingStatusResponse> {
+  const url = `${API_BASE}/public/globalping-status`;
+  const auth = getOptionalPublicAuth();
+  const cached = auth.shouldBypassCache
+    ? null
+    : getCachedPublic<PublicGlobalpingStatusResponse>(url);
+  if (cached) return cached;
+
+  const res = await fetch(url, auth.fetchInit);
+  const data = await handleResponse<PublicGlobalpingStatusResponse>(res);
+  if (!auth.shouldBypassCache) setCachedPublic(url, data);
+  return data;
+}
+
+export async function fetchGlobalpingHistory(
+  monitorId: number,
+  range: '24h' = '24h',
+): Promise<GlobalpingHistoryResponse> {
+  const url = `${API_BASE}/public/monitors/${monitorId}/globalping-history?range=${range}`;
+  const auth = getOptionalPublicAuth();
+  const cached = auth.shouldBypassCache ? null : getCachedPublic<GlobalpingHistoryResponse>(url);
+  if (cached) return cached;
+
+  const res = await fetch(url, auth.fetchInit);
+  const data = await handleResponse<GlobalpingHistoryResponse>(res);
+  if (!auth.shouldBypassCache) setCachedPublic(url, data);
+  return data;
+}
+
 export async function fetchLatency(
   monitorId: number,
   range: '24h' = '24h',
@@ -497,10 +529,14 @@ export async function updateNotificationChannel(
   return handleResponse<{ notification_channel: NotificationChannel }>(res);
 }
 
-export async function testNotificationChannel(id: number): Promise<NotificationChannelTestResult> {
+export async function testNotificationChannel(
+  id: number,
+  input: { event_type?: NotificationChannelTestEventType; monitor_id?: number } = {},
+): Promise<NotificationChannelTestResult> {
   const res = await fetch(`${API_BASE}/admin/notification-channels/${id}/test`, {
     method: 'POST',
-    headers: getAuthHeaders(),
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(input),
   });
   return handleResponse<NotificationChannelTestResult>(res);
 }
