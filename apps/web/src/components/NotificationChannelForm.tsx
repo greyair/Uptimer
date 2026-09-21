@@ -25,6 +25,7 @@ interface NotificationChannelFormProps {
   onCancel: () => void;
   isLoading?: boolean;
   error?: string | undefined;
+  monitors?: Array<{ id: number; name: string }> | undefined;
 }
 
 const inputClass = INPUT_CLASS;
