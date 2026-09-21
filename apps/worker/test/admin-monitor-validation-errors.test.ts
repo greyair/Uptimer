@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../src/snapshots', () => ({
   refreshPublicHomepageSnapshotIfNeeded: vi.fn().mockResolvedValue(false),
 }));
+vi.mock('../src/monitor/tcp', () => ({
+  runTcpCheck: vi.fn(),
+}));
 
 import type { Env } from '../src/env';
 import { adminRoutes } from '../src/routes/admin';
