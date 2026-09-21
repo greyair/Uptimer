@@ -2,303 +2,294 @@
 
 English | [中文](notifications.zh-CN.md)
 
-Uptimer's notification system sends webhook alerts when monitor states change or incidents are created/updated. This document covers event types, channel configuration, payload construction, template variables, webhook signing, and troubleshooting.
+Uptimer sends notifications when monitor states change, incidents/maintenance events occur, or expiry warnings are raised.
 
-## Overview
+This fork supports three notification channel modes:
 
-The notification system:
+- **Custom Webhook**
+- **Telegram preset**
+- **WPush preset**
 
-- Sends alerts on critical state changes (UP->DOWN, DOWN->UP) and incident lifecycle events
-- Supports per-channel configuration: HTTP method, timeout, headers, payload format, templates, event filtering, and optional signing
-- Guarantees idempotent delivery: each event is sent to each channel at most once (via `notification_deliveries` unique constraint)
+For a full fork-vs-upstream inventory, see [Fork Differences](fork-differences.md).
 
-### Flow
+## Event types
 
-1. System produces an event (eventType + eventKey + payload)
-2. Find all active webhook channels
-3. For each channel:
-   - Filter by `enabled_events`
-   - Claim a delivery slot in `notification_deliveries` (idempotent)
-   - Render templates (message, payload, headers)
-   - Build URL/body based on `payload_type`
-   - Send via `fetch` (no-store + timeout)
-   - Record delivery result (success/failed)
+| Event | Description |
+| --- | --- |
+| `monitor.down` | Monitor transitioned to DOWN |
+| `monitor.up` | Monitor transitioned to UP |
+| `monitor.ssl.expiring` | SSL certificate is inside the configured warning window |
+| `monitor.domain.expiring` | Domain registration is inside the configured warning window |
+| `incident.created` | Incident created |
+| `incident.updated` | Incident updated |
+| `incident.resolved` | Incident resolved |
+| `maintenance.started` | Maintenance window started |
+| `maintenance.ended` | Maintenance window ended |
+| `test.ping` | Transport/configuration test |
 
-## Event Types
+## Delivery flow
 
-| Event                 | Description                                    |
-| --------------------- | ---------------------------------------------- |
-| `monitor.down`        | Monitor transitioned to DOWN state             |
-| `monitor.up`          | Monitor transitioned to UP state               |
-| `incident.created`    | New incident created                           |
-| `incident.updated`    | Incident received an update                    |
-| `incident.resolved`   | Incident marked as resolved                    |
-| `maintenance.started` | Maintenance window started                     |
-| `maintenance.ended`   | Maintenance window ended                       |
-| `test.ping`           | Test button (always allowed, even if filtered) |
+1. The system creates an event with `eventType`, `eventKey`, and payload.
+2. Active notification channels are loaded.
+3. Each channel is filtered by:
+   - `enabled_events`
+   - optional `monitor_ids`
+4. A delivery slot is claimed in `notification_deliveries`.
+5. The channel payload/message is rendered.
+6. The request is sent.
+7. Delivery result is stored as success/failed.
 
-## Event Keys (Idempotency)
+`test.ping` always bypasses event and monitor scope filtering so transport connectivity can be tested independently.
 
-Each event has a unique `event_key` used for deduplication:
+## Idempotency
 
-- Monitor: `monitor:<monitorId>:down|up:<timestamp>`
-- Incident: `incident:<incidentId>:created|resolved:<...>` or `incident:<incidentId>:update:<updateId>`
-- Test: `test:webhook:<channelId>:<now>`
+`notification_deliveries` prevents the same event from being delivered repeatedly to the same channel.
 
-> If you click the test button twice within the same second, the second request may be deduplicated. Wait 1 second and retry.
+Examples:
+
+```text
+monitor:<monitorId>:down:<timestamp>
+monitor:<monitorId>:up:<timestamp>
+monitor:<monitorId>:ssl-expiring:<expiresAt>:<warnDays>
+monitor:<monitorId>:domain-expiring:<expiresAt>:<warnDays>
+```
+
+A renewed certificate/domain or changed warning threshold naturally creates a new expiry event key.
 
 ## Admin API
 
-| Method | Endpoint                                       | Description              |
-| ------ | ---------------------------------------------- | ------------------------ |
-| GET    | `/api/v1/admin/notification-channels`          | List all channels        |
-| POST   | `/api/v1/admin/notification-channels`          | Create a channel         |
-| PATCH  | `/api/v1/admin/notification-channels/:id`      | Update a channel         |
-| DELETE | `/api/v1/admin/notification-channels/:id`      | Delete a channel         |
-| POST   | `/api/v1/admin/notification-channels/:id/test` | Send a test notification |
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/v1/admin/notification-channels` | List channels |
+| POST | `/api/v1/admin/notification-channels` | Create channel |
+| PATCH | `/api/v1/admin/notification-channels/:id` | Update channel |
+| DELETE | `/api/v1/admin/notification-channels/:id` | Delete channel |
+| POST | `/api/v1/admin/notification-channels/:id/test` | Test channel |
 
-The test endpoint generates a `test.ping` event with sample data and returns the delivery record for debugging.
+The test endpoint supports:
 
-## Channel Configuration
+```text
+test.ping
+monitor.down
+monitor.up
+monitor.ssl.expiring
+monitor.domain.expiring
+```
 
-Webhook channel `config_json` fields (validated by Zod):
+For monitor-specific test events, provide/select a monitor id. The response reports whether the delivery was sent or skipped by monitor scope.
 
-| Field              | Required | Default | Description                                                                            |
-| ------------------ | -------- | ------- | -------------------------------------------------------------------------------------- |
-| `url`              | Yes      | —       | Webhook URL (`http://` or `https://` only)                                             |
-| `method`           | No       | `POST`  | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`                           |
-| `headers`          | No       | —       | Custom headers object `{ "Header-Name": "value" }`. Values support template rendering. |
-| `timeout_ms`       | No       | —       | Request timeout (1–60000 ms)                                                           |
-| `payload_type`     | No       | `json`  | `json`, `param`, or `x-www-form-urlencoded`                                            |
-| `message_template` | No       | —       | Template for the `message` variable                                                    |
-| `payload_template` | No       | —       | Custom payload template (see below)                                                    |
-| `enabled_events`   | No       | —       | Event whitelist array. Empty = all events. `test.ping` always passes.                  |
-| `signing`          | No       | —       | `{ enabled: boolean, secret_ref: string }` — HMAC-SHA256 signing                       |
+## Common channel fields
 
-## Payload Modes
+All notification modes support the following concepts where applicable:
 
-### Mode 1: Default JSON (no template)
+| Field | Description |
+| --- | --- |
+| `timeout_ms` | Request timeout |
+| `message_template` | Rendered message template |
+| `enabled_events` | Event whitelist; empty/omitted means all |
+| `monitor_ids` | Optional monitor scope; empty/omitted means all monitors |
 
-When `payload_type = json` and no `payload_template` is set, Uptimer sends the full system payload:
+### Monitor scope
+
+Example:
+
+```json
+{
+  "monitor_ids": [1, 3]
+}
+```
+
+Rules:
+
+- missing or empty `monitor_ids`: all monitors
+- monitor events: event monitor id must be in scope
+- incident/maintenance events: at least one associated monitor must match
+- `test.ping`: always allowed
+
+## Custom Webhook
+
+Custom Webhook supports:
+
+- URL
+- method: GET / POST / PUT / PATCH / DELETE / HEAD
+- custom headers
+- timeout
+- payload type:
+  - `json`
+  - `param`
+  - `x-www-form-urlencoded`
+- message template
+- payload template
+- event whitelist
+- monitor scope
+- optional HMAC-SHA256 signing
+
+### Default JSON payload
+
+Without a custom payload template, a normal event payload is sent directly, for example:
 
 ```json
 {
   "event": "monitor.down",
   "event_id": "monitor:1:down:1700000000",
   "timestamp": 1700000000,
-  "monitor": { "id": 1, "name": "..." },
-  "state": { "status": "down", "http_status": 500 }
+  "monitor": {
+    "id": 1,
+    "name": "API"
+  },
+  "state": {
+    "status": "down",
+    "http_status": 500
+  }
 }
 ```
 
-All fields are present, and numeric types are preserved.
+### Template syntax
 
-### Mode 2: Custom template
+Supported examples:
 
-When `payload_template` is set, the rendered template becomes the payload. System fields are **not** auto-injected — include them explicitly:
-
-```json
-{
-  "event": "{{event}}",
-  "event_id": "{{event_id}}",
-  "text": "{{message}}",
-  "monitor_name": "{{monitor.name}}"
-}
+```text
+{{event}}
+{{monitor.name}}
+{{state.status}}
+{{checks[0].latency_ms}}
+$MSG
 ```
 
-### Mode 3: Minimal flat payload (non-JSON, no template)
+Missing paths resolve to an empty string.
 
-When `payload_type` is `param` or `x-www-form-urlencoded` and no template is set:
+Template access rejects `__proto__`, `prototype`, and `constructor`.
 
-```
-event, event_id, timestamp, message
-```
+Template substitution produces strings. If numeric types must be preserved, use the default payload instead of string interpolation.
 
-## Template System
+### HMAC signing
 
-Templates can be used in `message_template`, all string fields in `payload_template`, and all header values.
+When signing is enabled, Uptimer sends:
 
-### Syntax
-
-- `{{path.to.field}}` — Dot-notation path lookup
-- `{{checks[0].latency_ms}}` — Array index access
-- `$MSG` — Alias for the rendered `message`
-
-### Built-in Variables
-
-| Variable          | Type   | Description                                             |
-| ----------------- | ------ | ------------------------------------------------------- |
-| `event`           | string | Event type                                              |
-| `event_id`        | string | Idempotency key                                         |
-| `timestamp`       | number | Unix seconds                                            |
-| `channel.id`      | number | Channel ID                                              |
-| `channel.name`    | string | Channel name                                            |
-| `monitor.*`       | object | Monitor fields (if applicable)                          |
-| `state.*`         | object | Monitor state fields (if applicable)                    |
-| `default_message` | string | System-generated default message                        |
-| `message`         | string | Final message (rendered from `message_template` if set) |
-
-> The raw system payload is spread into top-level variables. If the payload contains `monitor`, you can access `{{monitor.name}}` directly.
-
-### Missing Fields
-
-If a path doesn't exist, the template resolves to an empty string.
-
-### Security
-
-Template paths reject access to `__proto__`, `prototype`, and `constructor` to prevent prototype pollution.
-
-### Type Caveat
-
-Template substitution produces strings. `"id": "{{monitor.id}}"` becomes `"id": "12"` (string), not `12` (number). If you need numeric types, use the default payload (no template) or convert on the receiving end.
-
-## Payload Type Details
-
-### `json`
-
-- Body: `JSON.stringify(payload)`
-- Default header: `Content-Type: application/json` (no `charset=utf-8` appended for compatibility)
-- Custom `Content-Type` in `headers` takes precedence
-
-### `param`
-
-- Payload (must be a flat object) is converted to query parameters appended to the URL
-- No request body
-
-### `x-www-form-urlencoded`
-
-- POST/PUT/PATCH/DELETE: body as `URLSearchParams`, header `Content-Type: application/x-www-form-urlencoded`
-- GET/HEAD: falls back to query parameters (no body)
-
-## Webhook Signing
-
-When `signing.enabled = true`, Uptimer adds two headers to each request:
-
-```
+```text
 X-Uptimer-Timestamp: <unix_seconds>
 X-Uptimer-Signature: sha256=<hmac_hex>
 ```
 
-**Signature computation**:
+Signature input:
 
-- `message = "<timestamp>.<rawBody>"`
-- `hmac = HMAC-SHA256(secret, message)` as hex
-
-The secret is read from the Worker environment variable specified by `secret_ref`. It is never stored in the database.
-
-### Verification Example (Node.js)
-
-```js
-import crypto from 'node:crypto';
-
-function verify(req, secret) {
-  const ts = req.headers['x-uptimer-timestamp'];
-  const sig = req.headers['x-uptimer-signature']; // "sha256=..."
-  const rawBody = req.rawBody ?? '';
-  const expected = crypto.createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
-  return sig === `sha256=${expected}`;
-}
+```text
+<timestamp>.<rawBody>
 ```
 
-## Configuration Examples
+The signing secret is read from the Worker secret configured by `secret_ref`.
 
-### Discord / Slack / ntfy via Apprise
+## Telegram preset
+
+Telegram is a built-in preset.
+
+It supports:
+
+- bot token entered directly and encrypted before storage
+- Worker Secret reference
+- chat id
+- optional message thread id
+- parse mode
+- silent/protected message options
+- timeout
+- message template
+- event whitelist
+- monitor scope
+
+When the token is entered directly, it is encrypted before being saved. The Admin API never returns encrypted token material.
+
+## WPush preset
+
+WPush is a fork extension and is submitted upstream as PR #103.
+
+It sends:
+
+```text
+POST https://api.wpush.cn/api/v1/send
+Content-Type: application/x-www-form-urlencoded
+```
+
+Supported fields:
+
+- API key entered directly and encrypted before storage
+- Worker Secret reference
+- `channel`
+- optional `option`
+- optional URL
+- timeout
+- title template
+- message template
+- event whitelist
+- monitor scope
+
+Example:
 
 ```json
 {
-  "url": "https://your-apprise-endpoint/notify",
-  "method": "POST",
-  "payload_type": "json",
-  "message_template": "[{{event}}] {{monitor.name}} => {{state.status}}\n$MSG",
-  "payload_template": {
-    "urls": "ntfys://your-ntfy-topic",
-    "body": "{{message}}"
-  }
+  "preset": "wpush",
+  "api_key_secret_ref": "UPTIMER_WPUSH_API_KEY",
+  "channel": "wechat",
+  "option": "ops"
 }
 ```
 
-### Query Parameter Webhook (GET)
+When an API key is entered directly, it is AES-GCM encrypted using a key derived from `ADMIN_TOKEN`.
+
+Changing `ADMIN_TOKEN` requires re-entering credentials that were encrypted with the previous token.
+
+## Testing monitor scope
+
+The Admin UI can test a real monitor scope instead of only transport connectivity.
+
+Example:
 
 ```json
 {
-  "url": "https://example.com/webhook",
-  "method": "GET",
-  "payload_type": "param",
-  "payload_template": {
-    "event": "{{event}}",
-    "monitor": "{{monitor.name}}",
-    "msg": "{{message}}"
-  }
+  "event_type": "monitor.down",
+  "monitor_id": 3
 }
 ```
 
-### Form-encoded Webhook (POST)
+If monitor #3 is outside the selected channel scope, the result is returned as **skipped** and no external request is sent.
 
-```json
-{
-  "url": "https://example.com/webhook",
-  "method": "POST",
-  "payload_type": "x-www-form-urlencoded",
-  "payload_template": {
-    "event": "{{event}}",
-    "msg": "{{message}}"
-  }
-}
-```
+Use `test.ping` when only transport/API credentials need to be checked.
 
 ## Troubleshooting
 
-### Check the Test API Response
+Common cases:
 
-Use the admin dashboard test button or call the API directly:
+| Symptom | Likely cause |
+| --- | --- |
+| Real event not delivered | `enabled_events` does not include it |
+| Event reports skipped | Selected monitor is outside `monitor_ids` |
+| Channel active but no external request | Scope/event filter skipped it |
+| HTTP 400/415 | Receiver rejected content type or payload |
+| Timeout | Remote notification service is slow/unreachable |
+| Missing signing secret | Worker Secret named by `secret_ref` is not configured |
+| WPush/Telegram credential fails after ADMIN_TOKEN rotation | Re-enter directly stored encrypted credentials |
 
-```
-POST /api/v1/admin/notification-channels/:id/test
-```
-
-The response includes:
-
-- `delivery.status` — `success` or `failed`
-- `delivery.http_status` — HTTP status code (may be null on network errors)
-- `delivery.error` — Error description
-
-**Common errors**:
-
-- `HTTP 400/415`: Receiver rejects the content-type or body structure
-- `Timeout after XXXXms`: Receiver is slow or unreachable
-- `Signing secret not configured: XXX`: Signing enabled but the referenced secret is missing
-
-### Common "Looks Right But Doesn't Work" Issues
-
-| Symptom                                  | Cause                                                                                     |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Receiver gets wrong fields               | `payload_template` field names don't match what the receiver expects                      |
-| Content-Type rejected                    | Some receivers require exact `application/json` — don't override headers unless necessary |
-| Real events not delivered                | `enabled_events` whitelist is active but doesn't include the event type                   |
-| Channel appears active but no deliveries | `is_active = false` on the channel                                                        |
-| Duplicate clicks do nothing              | Idempotent deduplication — same `event_key` within 1 second is skipped                    |
-
-### Query Delivery Records
-
-Check recent deliveries in your local D1:
+Recent delivery records can be inspected in D1:
 
 ```bash
 wrangler d1 execute uptimer --local \
   --command="SELECT * FROM notification_deliveries ORDER BY created_at DESC LIMIT 20;"
 ```
 
-## Known Limitations
+## Known limitations
 
-- Only webhook channels are supported (no built-in email, Telegram, etc.)
-- Template substitution always produces strings (see Type Caveat above)
-- `payload_template` JSON depth is capped at 32 levels
+- Built-in presets currently include Telegram and WPush; email is not built in.
+- Custom payload template substitution produces strings.
+- Payload template JSON nesting is capped.
+- Monitor scope is id-based; renaming a monitor does not affect scope.
 
-## Source Code Reference
+## Source code reference
 
-| Component        | File                                 |
-| ---------------- | ------------------------------------ |
-| Webhook dispatch | `apps/worker/src/notify/webhook.ts`  |
-| Idempotent dedup | `apps/worker/src/notify/dedupe.ts`   |
-| Template engine  | `apps/worker/src/notify/template.ts` |
-| Config schema    | `packages/db/src/json.ts`            |
-| Test endpoint    | `apps/worker/src/routes/admin.ts`    |
+| Component | File |
+| --- | --- |
+| Dispatch | `apps/worker/src/notify/webhook.ts` |
+| Deduplication | `apps/worker/src/notify/dedupe.ts` |
+| Template engine | `apps/worker/src/notify/template.ts` |
+| Telegram token encryption | `apps/worker/src/notify/telegram-token.ts` |
+| WPush key encryption | `apps/worker/src/notify/wpush-token.ts` |
+| Config schema | `packages/db/src/json.ts` |
+| Admin test endpoint | `apps/worker/src/routes/admin.ts` |
