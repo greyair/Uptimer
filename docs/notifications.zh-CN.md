@@ -2,285 +2,269 @@
 
 [English](notifications.md) | 中文
 
-Uptimer 的通知系统在监控状态变化或事件创建/更新时发送 Webhook 通知。本文档涵盖事件类型、渠道配置、Payload 构建、模板变量、Webhook 签名与故障排除。
+Uptimer 会在监控状态变化、Incident / Maintenance 生命周期变化，以及 SSL/域名到期预警时发送通知。
 
-## 概览
+当前 fork 支持三种通知渠道：
 
-通知系统的核心能力：
+- **Custom Webhook**
+- **Telegram 预设**
+- **WPush 预设**
 
-- 在关键状态变化（UP->DOWN、DOWN->UP）和事件生命周期事件时发送通知
-- 每个渠道独立配置：HTTP 方法、超时、Headers、Payload 格式、模板、事件过滤、可选签名
-- 幂等投递保证：每个事件对每个渠道最多发送一次（通过 `notification_deliveries` 唯一约束实现）
-
-### 核心流程
-
-1. 系统产生事件（eventType + eventKey + payload）
-2. 查找所有活跃的 Webhook 渠道
-3. 对每个渠道：
-   - 按 `enabled_events` 过滤
-   - 在 `notification_deliveries` 中占位（幂等 claim）
-   - 渲染模板（message、payload、headers）
-   - 根据 `payload_type` 构建 URL/body
-   - 通过 `fetch` 发送（no-store + timeout）
-   - 记录投递结果（success/failed）
+完整的 fork 与 upstream 差异请见 [Fork Differences](fork-differences.md)。
 
 ## 事件类型
 
-| 事件                  | 说明                             |
-| --------------------- | -------------------------------- |
-| `monitor.down`        | 监控项转为 DOWN 状态             |
-| `monitor.up`          | 监控项转为 UP 状态               |
-| `incident.created`    | 新事件创建                       |
-| `incident.updated`    | 事件收到更新                     |
-| `incident.resolved`   | 事件被标记为已解决               |
-| `maintenance.started` | 维护窗口开始                     |
-| `maintenance.ended`   | 维护窗口结束                     |
-| `test.ping`           | 测试按钮（即使被过滤也始终允许） |
+| 事件 | 说明 |
+| --- | --- |
+| `monitor.down` | 监控项进入 DOWN |
+| `monitor.up` | 监控项恢复 UP |
+| `monitor.ssl.expiring` | SSL 证书进入预警时间范围 |
+| `monitor.domain.expiring` | 域名注册到期时间进入预警范围 |
+| `incident.created` | 创建 Incident |
+| `incident.updated` | Incident 更新 |
+| `incident.resolved` | Incident 已解决 |
+| `maintenance.started` | 维护窗口开始 |
+| `maintenance.ended` | 维护窗口结束 |
+| `test.ping` | 测试通知渠道连接/配置 |
 
-## 事件键（幂等）
+## 投递流程
 
-每个事件都有唯一的 `event_key` 用于去重：
+1. 系统产生 `eventType`、`eventKey` 和 payload。
+2. 读取所有启用的通知渠道。
+3. 每个渠道依次按以下条件过滤：
+   - `enabled_events`
+   - 可选的 `monitor_ids`
+4. 在 `notification_deliveries` 中 claim 一次投递。
+5. 渲染消息和 payload。
+6. 发出请求。
+7. 记录 success / failed。
 
-- 监控：`monitor:<monitorId>:down|up:<timestamp>`
-- 事件：`incident:<incidentId>:created|resolved:<...>` 或 `incident:<incidentId>:update:<updateId>`
-- 测试：`test:webhook:<channelId>:<now>`
+`test.ping` 始终绕过事件和监控对象过滤，便于单独验证通知服务是否可用。
 
-> 如果在同一秒内连续点击测试按钮，第二次请求可能被去重跳过。等待 1 秒后重试即可。
+## 幂等去重
+
+`notification_deliveries` 用于防止同一个事件重复发送给同一渠道。
+
+示例：
+
+```text
+monitor:<monitorId>:down:<timestamp>
+monitor:<monitorId>:up:<timestamp>
+monitor:<monitorId>:ssl-expiring:<expiresAt>:<warnDays>
+monitor:<monitorId>:domain-expiring:<expiresAt>:<warnDays>
+```
+
+证书/域名续期，或修改预警天数后，会自然生成新的到期事件 key。
 
 ## 管理端 API
 
-| 方法   | 端点                                           | 说明         |
-| ------ | ---------------------------------------------- | ------------ |
-| GET    | `/api/v1/admin/notification-channels`          | 列出所有渠道 |
-| POST   | `/api/v1/admin/notification-channels`          | 创建渠道     |
-| PATCH  | `/api/v1/admin/notification-channels/:id`      | 更新渠道     |
-| DELETE | `/api/v1/admin/notification-channels/:id`      | 删除渠道     |
-| POST   | `/api/v1/admin/notification-channels/:id/test` | 发送测试通知 |
+| 方法 | 端点 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/admin/notification-channels` | 查询渠道 |
+| POST | `/api/v1/admin/notification-channels` | 创建渠道 |
+| PATCH | `/api/v1/admin/notification-channels/:id` | 修改渠道 |
+| DELETE | `/api/v1/admin/notification-channels/:id` | 删除渠道 |
+| POST | `/api/v1/admin/notification-channels/:id/test` | 测试渠道 |
 
-测试端点会生成一个 `test.ping` 事件（带示例数据）并返回投递记录，用于调试。
+测试接口支持：
 
-## 渠道配置
+```text
+test.ping
+monitor.down
+monitor.up
+monitor.ssl.expiring
+monitor.domain.expiring
+```
 
-Webhook 渠道的 `config_json` 字段（由 Zod 校验）：
+测试监控事件时可以指定监控 ID。返回结果会明确表示是否真正发送，或因为 monitor scope 被标记为 **skipped**。
 
-| 字段               | 必填 | 默认值 | 说明                                                                   |
-| ------------------ | ---- | ------ | ---------------------------------------------------------------------- |
-| `url`              | 是   | —      | Webhook URL（仅允许 `http://` 或 `https://`）                          |
-| `method`           | 否   | `POST` | HTTP 方法：`GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`             |
-| `headers`          | 否   | —      | 自定义 Headers 对象 `{ "Header-Name": "value" }`。Value 支持模板渲染。 |
-| `timeout_ms`       | 否   | —      | 请求超时（1–60000 ms）                                                 |
-| `payload_type`     | 否   | `json` | `json`、`param` 或 `x-www-form-urlencoded`                             |
-| `message_template` | 否   | —      | `message` 变量的模板                                                   |
-| `payload_template` | 否   | —      | 自定义 Payload 模板（详见下文）                                        |
-| `enabled_events`   | 否   | —      | 事件白名单数组。空 = 全部事件。`test.ping` 始终通过。                  |
-| `signing`          | 否   | —      | `{ enabled: boolean, secret_ref: string }` — HMAC-SHA256 签名          |
+## 通用渠道字段
 
-## Payload 模式
+不同渠道按适用情况支持：
 
-### 模式 1：默认 JSON（无模板）
+| 字段 | 说明 |
+| --- | --- |
+| `timeout_ms` | 请求超时 |
+| `message_template` | 消息模板 |
+| `enabled_events` | 事件白名单；空/不设置表示全部 |
+| `monitor_ids` | 可选监控对象范围；空/不设置表示全部监控 |
 
-当 `payload_type = json` 且未设置 `payload_template` 时，Uptimer 发送完整的系统 Payload：
+### 监控对象范围
+
+示例：
+
+```json
+{
+  "monitor_ids": [1, 3]
+}
+```
+
+规则：
+
+- 不设置或空数组：全部监控
+- monitor 事件：monitor id 必须在范围内
+- Incident / Maintenance：关联监控中至少有一个匹配
+- `test.ping`：始终允许
+
+## Custom Webhook
+
+Custom Webhook 支持：
+
+- URL
+- GET / POST / PUT / PATCH / DELETE / HEAD
+- 自定义 Headers
+- 超时
+- Payload 类型：
+  - `json`
+  - `param`
+  - `x-www-form-urlencoded`
+- 消息模板
+- Payload 模板
+- 事件过滤
+- monitor scope
+- 可选 HMAC-SHA256 签名
+
+### 默认 JSON
+
+不设置自定义 Payload 模板时，会直接发送系统事件 payload，例如：
 
 ```json
 {
   "event": "monitor.down",
   "event_id": "monitor:1:down:1700000000",
   "timestamp": 1700000000,
-  "monitor": { "id": 1, "name": "..." },
-  "state": { "status": "down", "http_status": 500 }
+  "monitor": {
+    "id": 1,
+    "name": "API"
+  },
+  "state": {
+    "status": "down",
+    "http_status": 500
+  }
 }
 ```
 
-所有字段完整，数字类型保持不变。
+### 模板语法
 
-### 模式 2：自定义模板
+示例：
 
-设置了 `payload_template` 时，渲染后的模板即为最终 Payload。系统字段 **不会** 自动注入 — 需在模板中显式引用：
-
-```json
-{
-  "event": "{{event}}",
-  "event_id": "{{event_id}}",
-  "text": "{{message}}",
-  "monitor_name": "{{monitor.name}}"
-}
+```text
+{{event}}
+{{monitor.name}}
+{{state.status}}
+{{checks[0].latency_ms}}
+$MSG
 ```
 
-### 模式 3：最小扁平 Payload（非 JSON 无模板）
+不存在的路径会渲染为空字符串。
 
-当 `payload_type` 为 `param` 或 `x-www-form-urlencoded` 且未设置模板时：
+模板禁止访问 `__proto__`、`prototype`、`constructor`。
 
-```
-event, event_id, timestamp, message
-```
+模板替换最终生成字符串。如果必须保留数字类型，应使用默认 payload，而不是字符串模板替换。
 
-## 模板系统
+### HMAC 签名
 
-模板可用于 `message_template`、`payload_template` 中的所有字符串字段、以及 `headers` 中的所有 value。
+启用签名后：
 
-### 语法
-
-- `{{path.to.field}}` — 点号路径取值
-- `{{checks[0].latency_ms}}` — 数组下标访问
-- `$MSG` — 渲染后 `message` 的别名
-
-### 内置变量
-
-| 变量              | 类型   | 说明                                                 |
-| ----------------- | ------ | ---------------------------------------------------- |
-| `event`           | string | 事件类型                                             |
-| `event_id`        | string | 幂等键                                               |
-| `timestamp`       | number | Unix 秒                                              |
-| `channel.id`      | number | 渠道 ID                                              |
-| `channel.name`    | string | 渠道名称                                             |
-| `monitor.*`       | object | 监控项字段（如适用）                                 |
-| `state.*`         | object | 监控状态字段（如适用）                               |
-| `default_message` | string | 系统生成的默认消息                                   |
-| `message`         | string | 最终消息（若设置了 `message_template` 则为渲染结果） |
-
-> 系统原始 Payload 会展开到顶层变量。如果 Payload 包含 `monitor`，可直接使用 `{{monitor.name}}`。
-
-### 缺失字段
-
-路径不存在时，模板解析为空字符串。
-
-### 安全限制
-
-模板路径拒绝访问 `__proto__`、`prototype` 和 `constructor`，防止原型链污染。
-
-### 类型说明
-
-模板替换本质是字符串替换。`"id": "{{monitor.id}}"` 最终变为 `"id": "12"`（字符串），而非数字 `12`。如果需要数字类型，请使用默认 Payload（不设置模板）或在接收端做类型转换。
-
-## Payload Type 详解
-
-### `json`
-
-- Body：`JSON.stringify(payload)`
-- 默认 Header：`Content-Type: application/json`（为兼容性不附加 `charset=utf-8`）
-- 如在 `headers` 中手动设置了 `Content-Type`，则不会被覆盖
-
-### `param`
-
-- Payload（必须是扁平对象）转换为查询参数拼接到 URL 上
-- 不发送请求 body
-
-### `x-www-form-urlencoded`
-
-- POST/PUT/PATCH/DELETE：body 为 `URLSearchParams`，Header `Content-Type: application/x-www-form-urlencoded`
-- GET/HEAD：退化为查询参数（无 body）
-
-## Webhook 签名
-
-当 `signing.enabled = true` 时，Uptimer 在每个请求中附加两个 Header：
-
-```
+```text
 X-Uptimer-Timestamp: <unix_seconds>
 X-Uptimer-Signature: sha256=<hmac_hex>
 ```
 
-**签名计算**：
+签名内容：
 
-- `message = "<timestamp>.<rawBody>"`
-- `hmac = HMAC-SHA256(secret, message)` 的十六进制值
-
-Secret 从 Worker 环境变量中读取（由 `secret_ref` 指定），永远不会存入数据库。
-
-### 验证示例（Node.js）
-
-```js
-import crypto from 'node:crypto';
-
-function verify(req, secret) {
-  const ts = req.headers['x-uptimer-timestamp'];
-  const sig = req.headers['x-uptimer-signature']; // "sha256=..."
-  const rawBody = req.rawBody ?? '';
-  const expected = crypto.createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
-  return sig === `sha256=${expected}`;
-}
+```text
+<timestamp>.<rawBody>
 ```
 
-## 配置示例
+Secret 从 `secret_ref` 指定的 Worker Secret 中读取。
 
-### 通过 Apprise 推送到 Discord / Slack / ntfy
+## Telegram 预设
+
+Telegram 是内置预设，支持：
+
+- 直接输入 Bot Token，并在保存前加密
+- Worker Secret 引用
+- Chat ID
+- 可选 Message Thread ID
+- Parse Mode
+- 静默/内容保护选项
+- 超时
+- 消息模板
+- 事件过滤
+- monitor scope
+
+直接输入的 Token 不会以明文存储，Admin API 也不会返回密文。
+
+## WPush 预设
+
+WPush 是本 fork 的扩展功能，已经作为 upstream PR #103 提交。
+
+发送方式：
+
+```text
+POST https://api.wpush.cn/api/v1/send
+Content-Type: application/x-www-form-urlencoded
+```
+
+支持：
+
+- 直接输入 API Key，并在保存前加密
+- Worker Secret 引用
+- `channel`
+- 可选 `option`
+- 可选 URL
+- 超时
+- 标题模板
+- 消息模板
+- 事件过滤
+- monitor scope
+
+示例：
 
 ```json
 {
-  "url": "https://your-apprise-endpoint/notify",
-  "method": "POST",
-  "payload_type": "json",
-  "message_template": "[{{event}}] {{monitor.name}} => {{state.status}}\n$MSG",
-  "payload_template": {
-    "urls": "ntfys://your-ntfy-topic",
-    "body": "{{message}}"
-  }
+  "preset": "wpush",
+  "api_key_secret_ref": "UPTIMER_WPUSH_API_KEY",
+  "channel": "wechat",
+  "option": "ops"
 }
 ```
 
-### 查询参数 Webhook (GET)
+直接输入的 API Key 使用从 `ADMIN_TOKEN` 派生的密钥进行 AES-GCM 加密。
+
+如果更换 `ADMIN_TOKEN`，之前使用旧 token 加密保存的 Telegram/WPush 凭证需要重新输入。
+
+## 测试 monitor scope
+
+管理后台可以直接测试一个实际的监控事件，而不是只能发 `test.ping`。
+
+例如：
 
 ```json
 {
-  "url": "https://example.com/webhook",
-  "method": "GET",
-  "payload_type": "param",
-  "payload_template": {
-    "event": "{{event}}",
-    "monitor": "{{monitor.name}}",
-    "msg": "{{message}}"
-  }
+  "event_type": "monitor.down",
+  "monitor_id": 3
 }
 ```
 
-### 表单编码 Webhook (POST)
+如果 monitor #3 不在该通知渠道配置的范围内，结果会显示 **skipped**，并且不会向外部通知服务发送请求。
 
-```json
-{
-  "url": "https://example.com/webhook",
-  "method": "POST",
-  "payload_type": "x-www-form-urlencoded",
-  "payload_template": {
-    "event": "{{event}}",
-    "msg": "{{message}}"
-  }
-}
-```
+只测试通知服务连接/API Key 时，使用 `test.ping`。
 
 ## 故障排除
 
-### 检查测试 API 返回
+| 现象 | 常见原因 |
+| --- | --- |
+| 真实事件没有发送 | `enabled_events` 没包含该事件 |
+| 测试结果显示 skipped | 选择的监控不在 `monitor_ids` 范围 |
+| 渠道启用但没有外部请求 | 被事件/监控对象过滤 |
+| HTTP 400/415 | 对方拒绝 Content-Type 或 payload |
+| Timeout | 通知服务超时/不可达 |
+| Signing secret missing | `secret_ref` 对应 Worker Secret 没设置 |
+| 更换 ADMIN_TOKEN 后 Telegram/WPush 失败 | 重新输入原来直接保存的加密凭证 |
 
-使用管理后台的测试按钮或直接调用 API：
-
-```
-POST /api/v1/admin/notification-channels/:id/test
-```
-
-返回内容包含：
-
-- `delivery.status` — `success` 或 `failed`
-- `delivery.http_status` — HTTP 状态码（网络错误时可能为 null）
-- `delivery.error` — 错误描述
-
-**常见错误**：
-
-- `HTTP 400/415`：接收端拒绝 Content-Type 或 body 结构
-- `Timeout after XXXXms`：接收端响应慢或不可达
-- `Signing secret not configured: XXX`：开启了签名但未配置对应 Secret
-
-### 常见"配置看起来对但不工作"的原因
-
-| 症状                 | 原因                                                             |
-| -------------------- | ---------------------------------------------------------------- |
-| 接收端收到错误字段   | `payload_template` 中的字段名与接收端期望的不匹配                |
-| Content-Type 被拒绝  | 某些接收端要求精确的 `application/json` — 非必要不要覆盖 headers |
-| 真实事件未投递       | `enabled_events` 白名单生效，但未包含该事件类型                  |
-| 渠道显示活跃但无投递 | 渠道的 `is_active = false`                                       |
-| 重复点击无响应       | 幂等去重 — 同一 `event_key` 在 1 秒内被跳过                      |
-
-### 查询投递记录
-
-在本地 D1 中查看最近的投递记录：
+本地 D1 查看最近投递记录：
 
 ```bash
 wrangler d1 execute uptimer --local \
@@ -289,16 +273,19 @@ wrangler d1 execute uptimer --local \
 
 ## 已知限制
 
-- 目前仅支持 Webhook 渠道（无内置 Email、Telegram 等）
-- 模板替换始终产生字符串（详见上方「类型说明」）
-- `payload_template` 的 JSON 深度上限为 32 层
+- 当前内置预设包括 Telegram 和 WPush；暂未内置 Email。
+- 自定义 Payload 模板替换最终都是字符串。
+- Payload 模板 JSON 嵌套深度有限制。
+- monitor scope 基于 monitor ID，修改监控名称不会影响范围。
 
 ## 源码参考
 
-| 组件         | 文件                                 |
-| ------------ | ------------------------------------ |
-| Webhook 派发 | `apps/worker/src/notify/webhook.ts`  |
-| 幂等去重     | `apps/worker/src/notify/dedupe.ts`   |
-| 模板引擎     | `apps/worker/src/notify/template.ts` |
-| 配置 Schema  | `packages/db/src/json.ts`            |
-| 测试端点     | `apps/worker/src/routes/admin.ts`    |
+| 组件 | 文件 |
+| --- | --- |
+| 通知派发 | `apps/worker/src/notify/webhook.ts` |
+| 幂等去重 | `apps/worker/src/notify/dedupe.ts` |
+| 模板引擎 | `apps/worker/src/notify/template.ts` |
+| Telegram Token 加密 | `apps/worker/src/notify/telegram-token.ts` |
+| WPush API Key 加密 | `apps/worker/src/notify/wpush-token.ts` |
+| 配置 Schema | `packages/db/src/json.ts` |
+| 测试接口 | `apps/worker/src/routes/admin.ts` |
