@@ -16,10 +16,9 @@ const monitorGroupSortOrderSchema = z.number().int().min(-100_000).max(100_000);
 const monitorSortOrderSchema = z.number().int().min(-100_000).max(100_000);
 const httpResponseMatchModeSchema = z.enum(HTTP_RESPONSE_MATCH_MODES);
 const probeModeSchema = z.enum(['direct', 'globalping']);
-const globalpingLocationsSchema = z
-  .array(z.string().trim().min(1).max(128))
-  .min(1)
-  .max(10);
+const globalpingLocationSchema = z.string().trim().min(1).max(128);
+const globalpingLocationsSchema = z.array(globalpingLocationSchema).min(1).max(10);
+const globalpingLocationsPatchSchema = z.array(globalpingLocationSchema).max(10);
 const expiryWarnDaysSchema = z.number().int().min(1).max(365);
 const domainNameSchema = z.preprocess(
   (value) => {
@@ -192,7 +191,7 @@ export const patchMonitorInputSchema = z
     is_active: z.boolean().optional(),
 
     probe_mode: probeModeSchema.optional(),
-    globalping_locations: globalpingLocationsSchema.nullable().optional(),
+    globalping_locations: globalpingLocationsPatchSchema.nullable().optional(),
     ssl_check_enabled: z.boolean().optional(),
     ssl_warn_days: expiryWarnDaysSchema.optional(),
     domain_name: domainNameSchema,
