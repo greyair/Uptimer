@@ -58,6 +58,14 @@ jobs:
           database_name = "uptimer"
           database_id = "$D1_ID"
           EOF
+      - name: Current monitor intervals
+        run: |
+          echo '=== MONITORS ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer \
+            --remote \
+            --config /tmp/wrangler-d1-insights.toml \
+            --command "SELECT id, name, interval_sec, is_active FROM monitors ORDER BY id;" \
+            --json
       - name: Fragment last write
         run: |
           echo '=== FRAGMENT ==='
