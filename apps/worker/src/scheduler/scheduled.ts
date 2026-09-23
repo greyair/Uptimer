@@ -1040,99 +1040,6 @@ async function listDueMonitors(db: D1Database, checkedAt: number): Promise<DueMo
   return results ?? [];
 }
 
-async function hasSchedulableMonitors(db: D1Database): Promise<boolean> {
-  const cached = hasSchedulableMonitorsStatementByDb.get(db);
-  const statement = cached ?? db.prepare(HAS_SCHEDULABLE_MONITORS_SQL);
-  if (!cached) {
-    hasSchedulableMonitorsStatementByDb.set(db, statement);
-  }
-
-  const row = await statement.first<{ present: number }>();
-  return row !== null;
-}
-
-export async function listMonitorRowsByIds(
-  db: D1Database,
-  ids: number[],
-): Promise<DueMonitorRow[]> {
-  const uniqueIds = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
-  if (uniqueIds.length === 0) {
-    return [];
-  }
-
-  const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(', ');
-  const { results } = await db
-    .prepare(
-      `
-      SELECT
-        m.id,
-        m.name,
-        m.type,
-        m.target,
-        m.display_url,
-        m.interval_sec,
-        m.created_at,
-        m.timeout_ms,
-        m.http_method,
-        m.http_headers_json,
-        m.http_body,
-        m.follow_redirects,
-        m.expected_status_json,
-        m.forbidden_status_json,
-        m.response_keyword,
-        m.response_keyword_mode,
-        m.response_forbidden_keyword,
-        m.response_forbidden_keyword_mode,
-        e.probe_mode,
-        e.globalping_locations_json,
-        s.status AS state_status,
-        s.last_error AS state_last_error,
-        s.last_checked_at,
-        s.last_changed_at,
-        s.consecutive_failures,
-        s.consecutive_successes
-      FROM monitors m
-      LEFT JOIN monitor_state s ON s.monitor_id = m.id
-      LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
-      WHERE m.is_active = 1
-        AND (s.status IS NULL OR s.status != 'paused')
-        AND m.id IN (${placeholders})
-      ORDER BY m.id
-    `,
-    )
-    .bind(...uniqueIds)
-    .all<DueMonitorRow>();
-
-  return results ?? [];
-}
-
-function normalizePositiveIntegerIds(ids: readonly number[]): number[] {
-  const seen = new Set<number>();
-  const next: number[] = [];
-  for (const id of ids) {
-    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    next.push(id);
-  }
-  return next;
-}
-
-function buildBatchExecutionLockName(checkedAt: number, ids: readonly number[]): string {
-  return `${BATCH_EXECUTION_LOCK_PREFIX}${checkedAt}:${[...ids].sort((a, b) => a - b).join(',')}`;
-}
-
-function buildMonitorExecutionLockName(checkedAt: number, id: number): string {
-  return `${MONITOR_EXECUTION_LOCK_PREFIX}${checkedAt}:${id}`;
-}
-
-type MonitorExecutionLease = {
-  id: number;
-  name: string;
-  expiresAt: number;
-};
-
 async function claimMonitorExecutionLeases(
   db: D1Database,
   checkedAt: number,
@@ -1995,7 +1902,10 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
     ctx.waitUntil(queueHomepageRefresh());
   };
 
-  if (!(await hasSchedulableMonitors(env.DB))) {
+  // Most Cron ticks are idle when monitor intervals are longer than one minute.
+  // Avoid writing scheduler lease rows unless there is actual monitor work to serialize.
+  const initialDue = await listDueMonitors(env.DB, checkedAt);
+  if (initialDue.length === 0) {
     await queueIdleWork();
     return;
   }
@@ -2017,14 +1927,11 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   try {
     const useRuntimeFragmentPipeline = shouldUseScheduledRuntimeFragmentPipeline(env);
 
+    // Re-read after acquiring the lease: another invocation may have completed
+    // the same due monitors between the optimistic preflight and lease acquisition.
     const due = await listDueMonitors(env.DB, checkedAt);
 
     if (due.length === 0) {
-      const hasRunnableMonitor = await hasSchedulableMonitors(env.DB);
-      if (!hasRunnableMonitor) {
-        await queueIdleWork();
-        return;
-      }
       await initializeNotifications();
       schedulerLease.assertHeld('queueing homepage refresh');
       ctx.waitUntil(queueHomepageRefresh());
