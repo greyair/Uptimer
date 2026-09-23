@@ -63,7 +63,7 @@ jobs:
           echo '=== WRITES ==='
           pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
             --config /tmp/wrangler-d1-insights.toml \
-            --time-period=1h \
+            --time-period=6h \
             --sort-type=sum \
             --sort-by=writes \
             --sort-direction=DESC \
@@ -74,7 +74,7 @@ jobs:
           echo '=== READS ==='
           pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
             --config /tmp/wrangler-d1-insights.toml \
-            --time-period=1h \
+            --time-period=6h \
             --sort-type=sum \
             --sort-by=reads \
             --sort-direction=DESC \
