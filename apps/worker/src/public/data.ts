@@ -339,41 +339,42 @@ export async function listHeartbeatsByMonitorId(
 ): Promise<Map<number, PublicStatusResponse['monitors'][number]['heartbeats']>> {
   const byMonitor = new Map<number, PublicStatusResponse['monitors'][number]['heartbeats']>();
 
-  const ids = [...new Set(monitorIds)].filter((id) => Number.isFinite(id));
-  if (ids.length === 0) return byMonitor;
+  const ids = [...new Set(monitorIds)].filter(
+    (id) => Number.isInteger(id) && id > 0,
+  );
+  const limit = Math.max(0, Math.floor(limitPerMonitor));
+  if (ids.length === 0 || limit === 0) return byMonitor;
 
-  const placeholders = ids.map((_, idx) => `?${idx + 2}`).join(', ');
-  const sql = `
+  // Keep each monitor lookup index-friendly. A single ROW_NUMBER/PARTITION query
+  // forces D1 to rank the full history for every selected monitor before applying
+  // the per-monitor limit, which can turn a 60-point heartbeat read into tens of
+  // thousands of rows read. The existing (monitor_id, checked_at) index can satisfy
+  // these small bounded lookups efficiently.
+  const statement = db.prepare(`
     SELECT monitor_id, checked_at, status, latency_ms
-    FROM (
-      SELECT
-        id,
-        monitor_id,
-        checked_at,
-        status,
-        latency_ms,
-        ROW_NUMBER() OVER (
-          PARTITION BY monitor_id
-          ORDER BY checked_at DESC, id DESC
-        ) AS rn
-      FROM check_results
-      WHERE monitor_id IN (${placeholders})
-    )
-    WHERE rn <= ?1
-    ORDER BY monitor_id, checked_at DESC, id DESC
-  `;
+    FROM check_results
+    WHERE monitor_id = ?1
+    ORDER BY checked_at DESC, id DESC
+    LIMIT ?2
+  `);
+  const results = await db.batch<HeartbeatRow>(
+    ids.map((id) => statement.bind(id, limit)),
+  );
 
-  const { results } = await db
-    .prepare(sql)
-    .bind(limitPerMonitor, ...ids)
-    .all<HeartbeatRow>();
-  for (const r of results ?? []) {
-    appendMapValue(byMonitor, r.monitor_id, {
-      checked_at: r.checked_at,
-      status: toCheckStatus(r.status),
-      latency_ms: r.latency_ms,
-    });
-  }
+  results.forEach((result, index) => {
+    const monitorId = ids[index];
+    if (monitorId === undefined) return;
+    for (const row of result.results ?? []) {
+      // Defensive filter for fake/test D1 implementations; the real SQL already
+      // guarantees this condition.
+      if (row.monitor_id !== monitorId) continue;
+      appendMapValue(byMonitor, monitorId, {
+        checked_at: row.checked_at,
+        status: toCheckStatus(row.status),
+        latency_ms: row.latency_ms,
+      });
+    }
+  });
 
   return byMonitor;
 }
