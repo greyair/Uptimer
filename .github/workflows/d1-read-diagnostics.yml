@@ -1,0 +1,36 @@
+name: D1 Read Diagnostics
+
+on:
+  push:
+    branches:
+      - feature/extended-monitoring
+
+permissions:
+  contents: read
+
+jobs:
+  insights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.8.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Top D1 queries by rows read
+        run: |
+          pnpm exec wrangler d1 insights uptimer \
+            --time-period=1d \
+            --sort-type=sum \
+            --sort-by=reads \
+            --sort-direction=DESC \
+            --limit=15 \
+            --json
