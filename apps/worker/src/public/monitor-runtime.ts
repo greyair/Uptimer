@@ -4,6 +4,7 @@ export const MONITOR_RUNTIME_SNAPSHOT_KEY = 'monitor-runtime';
 export const MONITOR_RUNTIME_TOTALS_SNAPSHOT_KEY = 'monitor-runtime:totals';
 export const MONITOR_RUNTIME_SNAPSHOT_VERSION = 1;
 export const MONITOR_RUNTIME_MAX_AGE_SECONDS = 3 * 60;
+export const MONITOR_RUNTIME_INTERVAL_GRACE_SECONDS = 60;
 export const MONITOR_RUNTIME_HEARTBEAT_POINTS = 60;
 const FUTURE_SNAPSHOT_TOLERANCE_SECONDS = 60;
 
@@ -1040,10 +1041,35 @@ async function readStoredMonitorRuntimeTotalsSnapshotFromFullSnapshot(
   }
 }
 
+function resolveRuntimeSnapshotMaxAge(
+  snapshot: PublicMonitorRuntimeSnapshot,
+  maxAgeSeconds?: number,
+): number {
+  if (maxAgeSeconds !== undefined) {
+    return Math.max(0, maxAgeSeconds);
+  }
+
+  const positiveIntervals = snapshot.monitors
+    .map((monitor) => monitor.interval_sec)
+    .filter((interval) => Number.isFinite(interval) && interval > 0);
+  if (positiveIntervals.length === 0) {
+    return MONITOR_RUNTIME_MAX_AGE_SECONDS;
+  }
+
+  // The scheduler refreshes the runtime snapshot whenever any monitor is due.
+  // Therefore the shortest configured interval is the relevant cadence for
+  // deciding when the snapshot should be considered unexpectedly stale.
+  const shortestInterval = Math.min(...positiveIntervals);
+  return Math.max(
+    MONITOR_RUNTIME_MAX_AGE_SECONDS,
+    shortestInterval + MONITOR_RUNTIME_INTERVAL_GRACE_SECONDS,
+  );
+}
+
 export async function readPublicMonitorRuntimeSnapshot(
   db: D1Database,
   now: number,
-  maxAgeSeconds = MONITOR_RUNTIME_MAX_AGE_SECONDS,
+  maxAgeSeconds?: number,
 ): Promise<PublicMonitorRuntimeSnapshot | null> {
   const stored = await readStoredMonitorRuntimeSnapshot(db);
   if (!stored) return null;
@@ -1052,7 +1078,7 @@ export async function readPublicMonitorRuntimeSnapshot(
   }
 
   const age = Math.max(0, now - stored.generatedAt);
-  if (age > maxAgeSeconds) {
+  if (age > resolveRuntimeSnapshotMaxAge(stored.snapshot, maxAgeSeconds)) {
     return null;
   }
 
