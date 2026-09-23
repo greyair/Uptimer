@@ -1031,53 +1031,6 @@ async function listDueMonitors(db: D1Database, checkedAt: number): Promise<DueMo
   return results ?? [];
 }
 
-async function claimMonitorExecutionLeases(
-  db: D1Database,
-  checkedAt: number,
-  ids: readonly number[],
-  now: number,
-): Promise<{ claimedIds: number[]; leases: MonitorExecutionLease[] }> {
-  const claimedIds: number[] = [];
-  const expiresAt = now + MONITOR_EXECUTION_LOCK_LEASE_SECONDS;
-
-  const attempts = await Promise.all(
-    ids.map(async (id) => {
-      const name = buildMonitorExecutionLockName(checkedAt, id);
-      const acquired = await acquireLease(db, name, now, MONITOR_EXECUTION_LOCK_LEASE_SECONDS);
-      return acquired ? { id, name, expiresAt } : null;
-    }),
-  );
-
-  const leases: MonitorExecutionLease[] = [];
-  for (const lease of attempts) {
-    if (!lease) {
-      continue;
-    }
-    claimedIds.push(lease.id);
-    leases.push(lease);
-  }
-
-  return { claimedIds, leases };
-}
-
-async function listPendingMonitorRowsByIds(
-  db: D1Database,
-  ids: readonly number[],
-  checkedAt: number,
-): Promise<DueMonitorRow[]> {
-  const normalizedIds = normalizePositiveIntegerIds(ids);
-  if (normalizedIds.length === 0) {
-    return [];
-  }
-
-  const fetchedRows = await listMonitorRowsByIds(db, normalizedIds);
-  const rowById = new Map(fetchedRows.map((row) => [row.id, row]));
-  return normalizedIds
-    .map((id) => rowById.get(id) ?? null)
-    .filter((row): row is DueMonitorRow => row !== null)
-    .filter((row) => row.last_checked_at === null || row.last_checked_at < checkedAt);
-}
-
 export async function listMonitorRowsByIds(
   db: D1Database,
   ids: number[],
