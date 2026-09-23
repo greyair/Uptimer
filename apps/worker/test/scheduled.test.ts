@@ -1794,7 +1794,37 @@ describe('scheduler/scheduled regression', () => {
 
   it('logs lease release failures after the tick completes', async () => {
     vi.mocked(releaseLease).mockRejectedValueOnce(new Error('release failed'));
-    const env = createEnv({ dueRows: [] });
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 301,
+          name: 'release-test',
+          type: 'http',
+          target: 'https://example.com',
+          display_url: null,
+          interval_sec: 300,
+          timeout_ms: 5000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'worker',
+          globalping_locations_json: null,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: null,
+          last_changed_at: null,
+          consecutive_failures: 0,
+          consecutive_successes: 0,
+        },
+      ],
+    });
     const waitUntil = vi.fn();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
