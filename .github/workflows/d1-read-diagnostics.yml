@@ -43,9 +43,29 @@ jobs:
             exit 1
           fi
           echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+      - name: Resolve D1 database config
+        shell: bash
+        run: |
+          set -euo pipefail
+          D1_ID="$(
+            pnpm --filter @uptimer/worker exec wrangler d1 list --json             | jq -r 'map(select(.name == "uptimer")) | .[0].uuid // .[0].id // empty'
+          )"
+          if [[ -z "$D1_ID" || "$D1_ID" == "null" ]]; then
+            echo "Failed to resolve D1 database id."
+            exit 1
+          fi
+          cat > /tmp/wrangler-d1-insights.toml <<EOF
+          name = "uptimer-d1-insights"
+          compatibility_date = "2026-01-28"
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "uptimer"
+          database_id = "$D1_ID"
+          EOF
       - name: Top D1 queries by rows read
         run: |
           pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
+            --config /tmp/wrangler-d1-insights.toml \
             --time-period=1d \
             --sort-type=sum \
             --sort-by=reads \
