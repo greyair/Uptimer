@@ -67,7 +67,7 @@ jobs:
         run: |
           pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
             --config /tmp/wrangler-d1-insights.toml \
-            --time-period=1d \
+            --time-period=1h \
             --sort-type=sum \
             --sort-by=reads \
             --sort-direction=DESC \
