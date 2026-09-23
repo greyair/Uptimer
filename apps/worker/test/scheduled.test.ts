@@ -65,7 +65,7 @@ import { readSettings } from '../src/settings';
 import { createFakeD1Database, type FakeD1QueryHandler } from './helpers/fake-d1';
 
 type CreateEnvOptions = {
-  dueRows?: unknown[];
+  dueRows?: unknown[] | unknown[][];
   channels?: unknown[];
   suppressedMonitorIds?: number[];
   startedWindows?: unknown[];
@@ -86,6 +86,14 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     schedulableMonitorPresent = true,
     onRun,
   } = options;
+  const dueRowResults =
+    Array.isArray(dueRows) && dueRows.length > 0 && Array.isArray(dueRows[0])
+      ? [...(dueRows as unknown[][])]
+      : null;
+  const dueRowFallback = dueRowResults ? (dueRowResults.at(-1) ?? []) : (dueRows as unknown[]);
+  const readDueRows = () =>
+    dueRowResults ? (dueRowResults.shift() ?? dueRowFallback) : dueRowFallback;
+
   const schedulableMonitorResults = Array.isArray(schedulableMonitorPresent)
     ? [...schedulableMonitorPresent]
     : null;
@@ -119,7 +127,7 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     {
       match: 'from monitors m',
       all: () =>
-        dueRows.map((row) => {
+        readDueRows().map((row) => {
           if (typeof row === 'object' && row !== null && !('created_at' in row)) {
             Object.assign(row as Record<string, unknown>, { created_at: 0 });
           }
@@ -288,13 +296,70 @@ describe('scheduler/scheduled regression', () => {
   it('returns immediately when scheduler lease is not acquired', async () => {
     vi.mocked(acquireLease).mockResolvedValue(false);
 
-    const env = createEnv();
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 301,
+          name: 'lease-test',
+          type: 'http',
+          target: 'https://example.com',
+          interval_sec: 300,
+          timeout_ms: 5000,
+          http_method: 'GET',
+          follow_redirects: 1,
+          state_status: 'up',
+          last_checked_at: null,
+        },
+      ],
+    });
     const waitUntil = vi.fn();
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
     expect(readSettings).not.toHaveBeenCalled();
     expect(waitUntil).not.toHaveBeenCalled();
+  });
+
+  it('does not execute monitors when due work disappears after acquiring the scheduler lease', async () => {
+    const dueRow = {
+      id: 301,
+      name: 'race-monitor',
+      type: 'http',
+      target: 'https://example.com',
+      display_url: null,
+      interval_sec: 300,
+      timeout_ms: 5000,
+      http_method: 'GET',
+      http_headers_json: null,
+      http_body: null,
+      follow_redirects: 1,
+      expected_status_json: null,
+      forbidden_status_json: null,
+      response_keyword: null,
+      response_keyword_mode: null,
+      response_forbidden_keyword: null,
+      response_forbidden_keyword_mode: null,
+      probe_mode: 'worker',
+      globalping_locations_json: null,
+      state_status: 'up',
+      state_last_error: null,
+      last_checked_at: null,
+      last_changed_at: null,
+      consecutive_failures: 0,
+      consecutive_successes: 0,
+    };
+
+    const env = createEnv({
+      dueRows: [[dueRow], []],
+    });
+    const waitUntil = vi.fn();
+
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+
+    expect(acquireLease).toHaveBeenCalledTimes(1);
+    expect(runHttpCheck).not.toHaveBeenCalled();
+    expect(releaseLease).toHaveBeenCalledTimes(1);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
   });
 
   it('returns an empty exclusive batch result when no monitor ids remain', async () => {
@@ -413,14 +478,14 @@ describe('scheduler/scheduled regression', () => {
     expect(runHttpCheck).not.toHaveBeenCalled();
   });
 
-  it('queues homepage refresh when monitors are runnable but none are due', async () => {
+  it('queues homepage refresh without acquiring the scheduler lease when no monitors are due', async () => {
     const env = createEnv({ dueRows: [] });
     const waitUntil = vi.fn();
     const expectedNow = Math.floor(Date.now() / 1000);
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
-    expect(acquireLease).toHaveBeenCalledWith(env.DB, 'scheduler:tick', expectedNow, 135);
+    expect(acquireLease).not.toHaveBeenCalled();
     expect(readSettings).not.toHaveBeenCalled();
     expect(waitUntil).toHaveBeenCalledTimes(1);
     await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
@@ -492,11 +557,10 @@ describe('scheduler/scheduled regression', () => {
     );
   });
 
-  it('keeps idle public refresh and maintenance notifications after a post-lease pause race', async () => {
+  it('keeps idle public refresh and maintenance notifications when nothing is due', async () => {
     const now = Math.floor(Date.now() / 1000);
     const env = createEnv({
       dueRows: [],
-      schedulableMonitorPresent: [true, false],
       channels: [
         {
           id: 1,
@@ -525,8 +589,8 @@ describe('scheduler/scheduled regression', () => {
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
-    expect(acquireLease).toHaveBeenCalledTimes(1);
-    expect(releaseLease).toHaveBeenCalledTimes(1);
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(releaseLease).not.toHaveBeenCalled();
     expect(readSettings).not.toHaveBeenCalled();
     expect(waitUntil).toHaveBeenCalledTimes(2);
     await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
@@ -1730,7 +1794,37 @@ describe('scheduler/scheduled regression', () => {
 
   it('logs lease release failures after the tick completes', async () => {
     vi.mocked(releaseLease).mockRejectedValueOnce(new Error('release failed'));
-    const env = createEnv({ dueRows: [] });
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 301,
+          name: 'release-test',
+          type: 'http',
+          target: 'https://example.com',
+          display_url: null,
+          interval_sec: 300,
+          timeout_ms: 5000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'worker',
+          globalping_locations_json: null,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: null,
+          last_changed_at: null,
+          consecutive_failures: 0,
+          consecutive_successes: 0,
+        },
+      ],
+    });
     const waitUntil = vi.fn();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 

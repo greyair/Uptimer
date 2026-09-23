@@ -875,7 +875,6 @@ async function hasActiveWebhookChannels(db: D1Database): Promise<boolean> {
 }
 
 const listDueMonitorsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
-const hasSchedulableMonitorsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
 const persistStatementTemplatesByDb = new WeakMap<D1Database, PersistStatementTemplates>();
 const hasActiveWebhookChannelsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
 const activeWebhookPresenceCacheByDb = new WeakMap<
@@ -928,14 +927,6 @@ const LIST_DUE_MONITORS_SQL = `
   ORDER BY m.id
 `;
 
-const HAS_SCHEDULABLE_MONITORS_SQL = `
-  SELECT 1 AS present
-  FROM monitors m
-  LEFT JOIN monitor_state s ON s.monitor_id = m.id
-  WHERE m.is_active = 1
-    AND (s.status IS NULL OR s.status != 'paused')
-  LIMIT 1
-`;
 
 const PERSIST_STATEMENTS_SQL = {
   openOutageIfMissing: `
@@ -1038,17 +1029,6 @@ async function listDueMonitors(db: D1Database, checkedAt: number): Promise<DueMo
   const { results } = await statement.bind(checkedAt).all<DueMonitorRow>();
 
   return results ?? [];
-}
-
-async function hasSchedulableMonitors(db: D1Database): Promise<boolean> {
-  const cached = hasSchedulableMonitorsStatementByDb.get(db);
-  const statement = cached ?? db.prepare(HAS_SCHEDULABLE_MONITORS_SQL);
-  if (!cached) {
-    hasSchedulableMonitorsStatementByDb.set(db, statement);
-  }
-
-  const row = await statement.first<{ present: number }>();
-  return row !== null;
 }
 
 export async function listMonitorRowsByIds(
@@ -1995,7 +1975,10 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
     ctx.waitUntil(queueHomepageRefresh());
   };
 
-  if (!(await hasSchedulableMonitors(env.DB))) {
+  // Most Cron ticks are idle when monitor intervals are longer than one minute.
+  // Avoid writing scheduler lease rows unless there is actual monitor work to serialize.
+  const initialDue = await listDueMonitors(env.DB, checkedAt);
+  if (initialDue.length === 0) {
     await queueIdleWork();
     return;
   }
@@ -2017,14 +2000,11 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
   try {
     const useRuntimeFragmentPipeline = shouldUseScheduledRuntimeFragmentPipeline(env);
 
+    // Re-read after acquiring the lease: another invocation may have completed
+    // the same due monitors between the optimistic preflight and lease acquisition.
     const due = await listDueMonitors(env.DB, checkedAt);
 
     if (due.length === 0) {
-      const hasRunnableMonitor = await hasSchedulableMonitors(env.DB);
-      if (!hasRunnableMonitor) {
-        await queueIdleWork();
-        return;
-      }
       await initializeNotifications();
       schedulerLease.assertHeld('queueing homepage refresh');
       ctx.waitUntil(queueHomepageRefresh());
