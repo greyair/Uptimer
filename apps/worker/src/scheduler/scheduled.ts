@@ -875,7 +875,6 @@ async function hasActiveWebhookChannels(db: D1Database): Promise<boolean> {
 }
 
 const listDueMonitorsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
-const hasSchedulableMonitorsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
 const persistStatementTemplatesByDb = new WeakMap<D1Database, PersistStatementTemplates>();
 const hasActiveWebhookChannelsStatementByDb = new WeakMap<D1Database, D1PreparedStatement>();
 const activeWebhookPresenceCacheByDb = new WeakMap<
@@ -928,14 +927,6 @@ const LIST_DUE_MONITORS_SQL = `
   ORDER BY m.id
 `;
 
-const HAS_SCHEDULABLE_MONITORS_SQL = `
-  SELECT 1 AS present
-  FROM monitors m
-  LEFT JOIN monitor_state s ON s.monitor_id = m.id
-  WHERE m.is_active = 1
-    AND (s.status IS NULL OR s.status != 'paused')
-  LIMIT 1
-`;
 
 const PERSIST_STATEMENTS_SQL = {
   openOutageIfMissing: `
@@ -1039,6 +1030,135 @@ async function listDueMonitors(db: D1Database, checkedAt: number): Promise<DueMo
 
   return results ?? [];
 }
+
+async function claimMonitorExecutionLeases(
+  db: D1Database,
+  checkedAt: number,
+  ids: readonly number[],
+  now: number,
+): Promise<{ claimedIds: number[]; leases: MonitorExecutionLease[] }> {
+  const claimedIds: number[] = [];
+  const expiresAt = now + MONITOR_EXECUTION_LOCK_LEASE_SECONDS;
+
+  const attempts = await Promise.all(
+    ids.map(async (id) => {
+      const name = buildMonitorExecutionLockName(checkedAt, id);
+      const acquired = await acquireLease(db, name, now, MONITOR_EXECUTION_LOCK_LEASE_SECONDS);
+      return acquired ? { id, name, expiresAt } : null;
+    }),
+  );
+
+  const leases: MonitorExecutionLease[] = [];
+  for (const lease of attempts) {
+    if (!lease) {
+      continue;
+    }
+    claimedIds.push(lease.id);
+    leases.push(lease);
+  }
+
+  return { claimedIds, leases };
+}
+
+async function listPendingMonitorRowsByIds(
+  db: D1Database,
+  ids: readonly number[],
+  checkedAt: number,
+): Promise<DueMonitorRow[]> {
+  const normalizedIds = normalizePositiveIntegerIds(ids);
+  if (normalizedIds.length === 0) {
+    return [];
+  }
+
+  const fetchedRows = await listMonitorRowsByIds(db, normalizedIds);
+  const rowById = new Map(fetchedRows.map((row) => [row.id, row]));
+  return normalizedIds
+    .map((id) => rowById.get(id) ?? null)
+    .filter((row): row is DueMonitorRow => row !== null)
+    .filter((row) => row.last_checked_at === null || row.last_checked_at < checkedAt);
+}
+
+export async function listMonitorRowsByIds(
+  db: D1Database,
+  ids: number[],
+): Promise<DueMonitorRow[]> {
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(', ');
+  const { results } = await db
+    .prepare(
+      `
+      SELECT
+        m.id,
+        m.name,
+        m.type,
+        m.target,
+        m.display_url,
+        m.interval_sec,
+        m.created_at,
+        m.timeout_ms,
+        m.http_method,
+        m.http_headers_json,
+        m.http_body,
+        m.follow_redirects,
+        m.expected_status_json,
+        m.forbidden_status_json,
+        m.response_keyword,
+        m.response_keyword_mode,
+        m.response_forbidden_keyword,
+        m.response_forbidden_keyword_mode,
+        e.probe_mode,
+        e.globalping_locations_json,
+        s.status AS state_status,
+        s.last_error AS state_last_error,
+        s.last_checked_at,
+        s.last_changed_at,
+        s.consecutive_failures,
+        s.consecutive_successes
+      FROM monitors m
+      LEFT JOIN monitor_state s ON s.monitor_id = m.id
+      LEFT JOIN monitor_extensions e ON e.monitor_id = m.id
+      WHERE m.is_active = 1
+        AND (s.status IS NULL OR s.status != 'paused')
+        AND m.id IN (${placeholders})
+      ORDER BY m.id
+    `,
+    )
+    .bind(...uniqueIds)
+    .all<DueMonitorRow>();
+
+  return results ?? [];
+}
+
+function normalizePositiveIntegerIds(ids: readonly number[]): number[] {
+  const seen = new Set<number>();
+  const next: number[] = [];
+  for (const id of ids) {
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
+}
+
+function buildBatchExecutionLockName(checkedAt: number, ids: readonly number[]): string {
+  return `${BATCH_EXECUTION_LOCK_PREFIX}${checkedAt}:${[...ids].sort((a, b) => a - b).join(',')}`;
+}
+
+function buildMonitorExecutionLockName(checkedAt: number, id: number): string {
+  return `${MONITOR_EXECUTION_LOCK_PREFIX}${checkedAt}:${id}`;
+}
+
+type MonitorExecutionLease = {
+  id: number;
+  name: string;
+  expiresAt: number;
+};
 
 async function claimMonitorExecutionLeases(
   db: D1Database,
