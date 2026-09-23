@@ -27,7 +27,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Top D1 queries by rows read
         run: |
-          pnpm exec wrangler d1 insights uptimer \
+          pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
             --time-period=1d \
             --sort-type=sum \
             --sort-by=reads \
