@@ -518,6 +518,35 @@ export async function computeTodayPartialUptimeBatch(
   rangeStart: number,
   now: number,
 ): Promise<Map<number, UptimeWindowTotals>> {
+  // A runtime snapshot can be older than the normal public freshness window and
+  // still be a correct seed for today's totals if it contains the latest persisted
+  // check for every monitor. In that case materializing its totals to "now" avoids
+  // rescanning today's check_results history.
+  const staleRuntimeSnapshot = await readPublicMonitorRuntimeSnapshot(
+    db,
+    now,
+    Number.MAX_SAFE_INTEGER,
+  );
+  if (staleRuntimeSnapshot && snapshotHasMonitorIds(staleRuntimeSnapshot, monitors.map((m) => m.id))) {
+    const runtimeById = toMonitorRuntimeEntryMap(staleRuntimeSnapshot);
+    const snapshotMatchesPersistedState = monitors.every((monitor) => {
+      const entry = runtimeById.get(monitor.id);
+      return (
+        entry !== undefined &&
+        entry.interval_sec === monitor.interval_sec &&
+        entry.last_checked_at === monitor.last_checked_at
+      );
+    });
+    if (snapshotMatchesPersistedState) {
+      return new Map<number, UptimeWindowTotals>(
+        monitors.map((monitor) => [
+          monitor.id,
+          materializeMonitorRuntimeTotals(runtimeById.get(monitor.id)!, now),
+        ]),
+      );
+    }
+  }
+
   try {
     return await computeTodayPartialUptimeBatchSql(db, monitors, rangeStart, now);
   } catch (err) {
