@@ -69,7 +69,9 @@ export function GlobalpingLocationPicker({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        closePicker();
+        setOpen(false);
+        setQuery('');
+        setCustomSelector('');
       }
     };
     window.addEventListener('keydown', onKeyDown);
