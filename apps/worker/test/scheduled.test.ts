@@ -65,7 +65,7 @@ import { readSettings } from '../src/settings';
 import { createFakeD1Database, type FakeD1QueryHandler } from './helpers/fake-d1';
 
 type CreateEnvOptions = {
-  dueRows?: unknown[];
+  dueRows?: unknown[] | unknown[][];
   channels?: unknown[];
   suppressedMonitorIds?: number[];
   startedWindows?: unknown[];
@@ -86,6 +86,14 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     schedulableMonitorPresent = true,
     onRun,
   } = options;
+  const dueRowResults =
+    Array.isArray(dueRows) && dueRows.length > 0 && Array.isArray(dueRows[0])
+      ? [...(dueRows as unknown[][])]
+      : null;
+  const dueRowFallback = dueRowResults ? (dueRowResults.at(-1) ?? []) : (dueRows as unknown[]);
+  const readDueRows = () =>
+    dueRowResults ? (dueRowResults.shift() ?? dueRowFallback) : dueRowFallback;
+
   const schedulableMonitorResults = Array.isArray(schedulableMonitorPresent)
     ? [...schedulableMonitorPresent]
     : null;
@@ -119,7 +127,7 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     {
       match: 'from monitors m',
       all: () =>
-        dueRows.map((row) => {
+        readDueRows().map((row) => {
           if (typeof row === 'object' && row !== null && !('created_at' in row)) {
             Object.assign(row as Record<string, unknown>, { created_at: 0 });
           }
@@ -288,7 +296,22 @@ describe('scheduler/scheduled regression', () => {
   it('returns immediately when scheduler lease is not acquired', async () => {
     vi.mocked(acquireLease).mockResolvedValue(false);
 
-    const env = createEnv();
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 301,
+          name: 'lease-test',
+          type: 'http',
+          target: 'https://example.com',
+          interval_sec: 300,
+          timeout_ms: 5000,
+          http_method: 'GET',
+          follow_redirects: 1,
+          state_status: 'up',
+          last_checked_at: null,
+        },
+      ],
+    });
     const waitUntil = vi.fn();
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
@@ -326,36 +349,17 @@ describe('scheduler/scheduled regression', () => {
       consecutive_successes: 0,
     };
 
-    let dueQueryCount = 0;
     const env = createEnv({
-      dueRows: [dueRow],
+      dueRows: [[dueRow], []],
     });
-    const originalPrepare = env.DB.prepare.bind(env.DB);
-    env.DB.prepare = ((sql: string) => {
-      const statement = originalPrepare(sql);
-      const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase();
-      if (
-        normalizedSql.includes('from monitors m') &&
-        normalizedSql.includes('last_checked_at <= ?1 - m.interval_sec')
-      ) {
-        const originalAll = statement.all.bind(statement);
-        statement.all = (async (...args: unknown[]) => {
-          dueQueryCount += 1;
-          if (dueQueryCount >= 2) {
-            return { results: [], success: true, meta: {} } as never;
-          }
-          return await originalAll(...(args as []));
-        }) as typeof statement.all;
-      }
-      return statement;
-    }) as typeof env.DB.prepare;
-
     const waitUntil = vi.fn();
+
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
     expect(acquireLease).toHaveBeenCalledTimes(1);
     expect(runHttpCheck).not.toHaveBeenCalled();
     expect(releaseLease).toHaveBeenCalledTimes(1);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
   });
 
   it('returns an empty exclusive batch result when no monitor ids remain', async () => {
