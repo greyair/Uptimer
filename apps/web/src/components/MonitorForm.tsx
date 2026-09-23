@@ -10,6 +10,7 @@ import type {
   StatusCodeRule,
 } from '../api/types';
 import { useI18n } from '../app/I18nContext';
+import { GlobalpingLocationPicker } from './GlobalpingLocationPicker';
 import {
   Button,
   FIELD_HELP_CLASS,
@@ -357,8 +358,8 @@ export function MonitorForm(props: CreateProps | EditProps) {
   const [intervalSec, setIntervalSec] = useState(monitor?.interval_sec ?? 60);
   const [timeoutMs, setTimeoutMs] = useState(monitor?.timeout_ms ?? 10000);
   const [probeMode, setProbeMode] = useState<ProbeMode>(monitor?.probe_mode ?? 'direct');
-  const [globalpingLocationsInput, setGlobalpingLocationsInput] = useState(
-    (monitor?.globalping_locations ?? []).join(', '),
+  const [globalpingLocations, setGlobalpingLocations] = useState<string[]>(
+    monitor?.globalping_locations ?? [],
   );
   const [sslCheckEnabled, setSslCheckEnabled] = useState(monitor?.ssl_check_enabled ?? false);
   const [sslWarnDays, setSslWarnDays] = useState(monitor?.ssl_warn_days ?? 30);
@@ -440,14 +441,6 @@ export function MonitorForm(props: CreateProps | EditProps) {
     [groupSortOrderInput],
   );
 
-  const globalpingLocations = useMemo(
-    () =>
-      globalpingLocationsInput
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
-    [globalpingLocationsInput],
-  );
   const sslTargetValid = useMemo(() => {
     if (!sslCheckEnabled || type !== 'http') return true;
     try {
@@ -804,14 +797,11 @@ export function MonitorForm(props: CreateProps | EditProps) {
           {probeMode === 'globalping' && (
             <div>
               <label className={labelClass}>{t('monitor_form.globalping_locations')}</label>
-              <input
-                type="text"
-                value={globalpingLocationsInput}
-                onChange={(e) => setGlobalpingLocationsInput(e.target.value)}
-                className={inputClass}
-                placeholder={t('monitor_form.globalping_locations_placeholder')}
+              <GlobalpingLocationPicker
+                value={globalpingLocations}
+                onChange={setGlobalpingLocations}
+                maxSelections={10}
               />
-              <div className={FIELD_HELP_CLASS}>{t('monitor_form.globalping_locations_help')}</div>
             </div>
           )}
 
