@@ -297,6 +297,67 @@ describe('scheduler/scheduled regression', () => {
     expect(waitUntil).not.toHaveBeenCalled();
   });
 
+  it('does not execute monitors when due work disappears after acquiring the scheduler lease', async () => {
+    const dueRow = {
+      id: 301,
+      name: 'race-monitor',
+      type: 'http',
+      target: 'https://example.com',
+      display_url: null,
+      interval_sec: 300,
+      timeout_ms: 5000,
+      http_method: 'GET',
+      http_headers_json: null,
+      http_body: null,
+      follow_redirects: 1,
+      expected_status_json: null,
+      forbidden_status_json: null,
+      response_keyword: null,
+      response_keyword_mode: null,
+      response_forbidden_keyword: null,
+      response_forbidden_keyword_mode: null,
+      probe_mode: 'worker',
+      globalping_locations_json: null,
+      state_status: 'up',
+      state_last_error: null,
+      last_checked_at: null,
+      last_changed_at: null,
+      consecutive_failures: 0,
+      consecutive_successes: 0,
+    };
+
+    let dueQueryCount = 0;
+    const env = createEnv({
+      dueRows: [dueRow],
+    });
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = ((sql: string) => {
+      const statement = originalPrepare(sql);
+      const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase();
+      if (
+        normalizedSql.includes('from monitors m') &&
+        normalizedSql.includes('last_checked_at <= ?1 - m.interval_sec')
+      ) {
+        const originalAll = statement.all.bind(statement);
+        statement.all = (async (...args: unknown[]) => {
+          dueQueryCount += 1;
+          if (dueQueryCount >= 2) {
+            return { results: [], success: true, meta: {} } as never;
+          }
+          return await originalAll(...(args as []));
+        }) as typeof statement.all;
+      }
+      return statement;
+    }) as typeof env.DB.prepare;
+
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+
+    expect(acquireLease).toHaveBeenCalledTimes(1);
+    expect(runHttpCheck).not.toHaveBeenCalled();
+    expect(releaseLease).toHaveBeenCalledTimes(1);
+  });
+
   it('returns an empty exclusive batch result when no monitor ids remain', async () => {
     const env = createEnv();
     const result = await runExclusivePersistedMonitorBatch({
@@ -413,14 +474,14 @@ describe('scheduler/scheduled regression', () => {
     expect(runHttpCheck).not.toHaveBeenCalled();
   });
 
-  it('queues homepage refresh when monitors are runnable but none are due', async () => {
+  it('queues homepage refresh without acquiring the scheduler lease when no monitors are due', async () => {
     const env = createEnv({ dueRows: [] });
     const waitUntil = vi.fn();
     const expectedNow = Math.floor(Date.now() / 1000);
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
-    expect(acquireLease).toHaveBeenCalledWith(env.DB, 'scheduler:tick', expectedNow, 135);
+    expect(acquireLease).not.toHaveBeenCalled();
     expect(readSettings).not.toHaveBeenCalled();
     expect(waitUntil).toHaveBeenCalledTimes(1);
     await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
@@ -492,11 +553,10 @@ describe('scheduler/scheduled regression', () => {
     );
   });
 
-  it('keeps idle public refresh and maintenance notifications after a post-lease pause race', async () => {
+  it('keeps idle public refresh and maintenance notifications when nothing is due', async () => {
     const now = Math.floor(Date.now() / 1000);
     const env = createEnv({
       dueRows: [],
-      schedulableMonitorPresent: [true, false],
       channels: [
         {
           id: 1,
@@ -525,8 +585,8 @@ describe('scheduler/scheduled regression', () => {
 
     await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
 
-    expect(acquireLease).toHaveBeenCalledTimes(1);
-    expect(releaseLease).toHaveBeenCalledTimes(1);
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(releaseLease).not.toHaveBeenCalled();
     expect(readSettings).not.toHaveBeenCalled();
     expect(waitUntil).toHaveBeenCalledTimes(2);
     await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
