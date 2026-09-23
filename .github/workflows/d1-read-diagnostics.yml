@@ -25,6 +25,24 @@ jobs:
           node-version-file: '.node-version'
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Resolve Cloudflare Account ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
+          if [[ -z "$ACCOUNT_ID" ]]; then
+            ACCOUNT_ID="$(
+              curl -fsSL "https://api.cloudflare.com/client/v4/accounts" \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+              | jq -r '.result[0].id'
+            )"
+          fi
+          if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
+            echo "Failed to resolve Cloudflare account id."
+            exit 1
+          fi
+          echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
       - name: Top D1 queries by rows read
         run: |
           pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
