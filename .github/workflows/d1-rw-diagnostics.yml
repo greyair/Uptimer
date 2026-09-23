@@ -58,6 +58,14 @@ jobs:
           database_name = "uptimer"
           database_id = "$D1_ID"
           EOF
+      - name: Inspect fragment last-write time
+        run: |
+          echo '=== FRAGMENT LAST WRITE ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer \
+            --remote \
+            --config /tmp/wrangler-d1-insights.toml \
+            --command "SELECT COUNT(*) AS fragment_count, MAX(updated_at) AS max_updated_at, datetime(MAX(updated_at), 'unixepoch') AS max_updated_utc FROM public_snapshot_fragments;" \
+            --json
       - name: Top D1 queries by rows written
         run: |
           echo '=== WRITES ==='
