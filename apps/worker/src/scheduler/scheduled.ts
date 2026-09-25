@@ -10,6 +10,10 @@ import {
 import type { HttpResponseMatchMode, MonitorStatus } from '@uptimer/db/schema';
 
 import type { Env } from '../env';
+import {
+  readInternalScheduledBatchSize,
+  readProfileBoolean,
+} from '../config/profile';
 import { runInternalHomepageRefreshCore } from '../internal/homepage-refresh-core';
 import type { Trace } from '../observability/trace';
 import {
@@ -171,8 +175,7 @@ function shouldRefreshHomepageDirect(env: Env): boolean {
 }
 
 function shouldRefreshRuntimeFragmentsViaService(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
-  return isTruthyEnvFlag(rawEnv.UPTIMER_SCHEDULED_RUNTIME_FRAGMENT_REFRESH);
+  return readProfileBoolean(env, 'UPTIMER_SCHEDULED_RUNTIME_FRAGMENT_REFRESH');
 }
 
 function shouldUseScheduledRuntimeFragmentPipeline(env: Env): boolean {
@@ -180,21 +183,20 @@ function shouldUseScheduledRuntimeFragmentPipeline(env: Env): boolean {
   return (
     Boolean(env.SELF) &&
     shouldRefreshRuntimeFragmentsViaService(env) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_PUBLIC_MONITOR_UPDATE_FRAGMENT_WRITES)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_MONITOR_UPDATE_FRAGMENT_WRITES')
   );
 }
 
 function shouldSplitInternalCheckBatchFragmentWrites(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
-  return isTruthyEnvFlag(rawEnv.UPTIMER_INTERNAL_CHECK_BATCH_FRAGMENT_WRITE_SPLIT);
+  return readProfileBoolean(env, 'UPTIMER_INTERNAL_CHECK_BATCH_FRAGMENT_WRITE_SPLIT');
 }
 
 function shouldSeedScheduledShardedFragments(env: Env): boolean {
   const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED') &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED')
   );
 }
 
@@ -202,8 +204,8 @@ function shouldAssembleScheduledShardedSnapshots(env: Env): boolean {
   const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_PUBLIC_SHARDED_ASSEMBLER) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_SCHEDULED_SHARDED_ASSEMBLER)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_ASSEMBLER') &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_ASSEMBLER')
   );
 }
 
@@ -211,7 +213,7 @@ function shouldSkipScheduledHomepageRefreshForShardedSnapshots(env: Env): boolea
   const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_SCHEDULED_SHARDED_SKIP_HOMEPAGE_REFRESH) &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_SKIP_HOMEPAGE_REFRESH') &&
     (shouldSeedScheduledShardedFragments(env) || shouldAssembleScheduledShardedSnapshots(env))
   );
 }
@@ -220,7 +222,7 @@ function shouldUseScheduledShardedContinuation(env: Env): boolean {
   const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
-    isTruthyEnvFlag(rawEnv.UPTIMER_SCHEDULED_SHARDED_CONTINUATION) &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_CONTINUATION') &&
     (shouldSeedScheduledShardedFragments(env) || shouldAssembleScheduledShardedSnapshots(env))
   );
 }
@@ -2031,13 +2033,7 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
         ? new Set<number>()
         : await notificationsModule.listMaintenanceSuppressedMonitorIds(env.DB, now, dueMonitorIds);
 
-    const internalScheduledBatchSize = readBoundedPositiveIntegerEnv(
-      env,
-      'UPTIMER_INTERNAL_SCHEDULED_BATCH_SIZE',
-      INTERNAL_SCHEDULED_BATCH_SIZE,
-      1,
-      INTERNAL_SCHEDULED_BATCH_SIZE,
-    );
+    const internalScheduledBatchSize = readInternalScheduledBatchSize(env);
     const internalScheduledBatchConcurrency = readBoundedPositiveIntegerEnv(
       env,
       'UPTIMER_INTERNAL_SCHEDULED_BATCH_CONCURRENCY',
