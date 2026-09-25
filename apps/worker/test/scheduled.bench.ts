@@ -16,6 +16,9 @@ import { createFakeD1Database, type FakeD1QueryHandler } from './helpers/fake-d1
 type Scenario = {
   name: string;
   monitorCount: number;
+  dueCount: number;
+  schedule: 'staggered' | 'burst';
+  profile: 'low-write' | 'balanced' | 'high-scale';
   withChannel: boolean;
 };
 
@@ -29,11 +32,35 @@ type Sample = {
 const BENCH_LABEL = process.env.SCHEDULER_BENCH_LABEL ?? 'current-working-tree';
 const OUTPUT_PATH = process.env.SCHEDULER_BENCH_OUTPUT ?? null;
 
-const SCENARIOS: Scenario[] = [
-  { name: '1000 due monitors / no channels', monitorCount: 1000, withChannel: false },
-  { name: '5000 due monitors / no channels', monitorCount: 5000, withChannel: false },
-  { name: '5000 due monitors / 1 webhook channel', monitorCount: 5000, withChannel: true },
-];
+const MONITOR_COUNTS = [10, 25, 50] as const;
+const PROFILES = ['low-write', 'balanced', 'high-scale'] as const;
+
+const SCENARIOS: Scenario[] = PROFILES.flatMap((profile) =>
+  MONITOR_COUNTS.flatMap((monitorCount) => {
+    // Production monitors are close to a five-minute cadence. A staggered minute
+    // therefore has roughly one fifth of the fleet due, while burst models the
+    // worst case where the whole fleet becomes due on the same Cron tick.
+    const staggeredDueCount = Math.max(1, Math.ceil(monitorCount / 5));
+    return [
+      {
+        name: `${profile} / ${monitorCount} monitors / staggered (${staggeredDueCount} due)`,
+        monitorCount,
+        dueCount: staggeredDueCount,
+        schedule: 'staggered' as const,
+        profile,
+        withChannel: false,
+      },
+      {
+        name: `${profile} / ${monitorCount} monitors / burst (all due)`,
+        monitorCount,
+        dueCount: monitorCount,
+        schedule: 'burst' as const,
+        profile,
+        withChannel: false,
+      },
+    ];
+  }),
+);
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -85,7 +112,8 @@ function createEnvForScenario(scenario: Scenario): {
     statementCount: 0,
     waitUntilCalls: 0,
   };
-  const dueRows = makeDueRows(scenario.monitorCount);
+  const allRows = makeDueRows(scenario.monitorCount);
+  const dueRows = allRows.slice(0, scenario.dueCount);
   let homepageArtifactGeneratedAt = 0;
   const channels = scenario.withChannel
     ? [
@@ -225,7 +253,11 @@ function createEnvForScenario(scenario: Scenario): {
   };
 
   return {
-    env: { DB: db } as unknown as Env,
+    env: {
+      DB: db,
+      UPTIMER_PROFILE: scenario.profile,
+      UPTIMER_SCHEDULED_REFRESH_LOGS: '0',
+    } as unknown as Env,
     sampleState,
   };
 }
@@ -308,6 +340,9 @@ async function benchmarkScenario(scenario: Scenario) {
     label: BENCH_LABEL,
     scenario: scenario.name,
     monitorCount: scenario.monitorCount,
+    dueCount: scenario.dueCount,
+    schedule: scenario.schedule,
+    profile: scenario.profile,
     withChannel: scenario.withChannel,
     ...summarize(samples),
   };
@@ -331,5 +366,6 @@ describe('scheduler benchmark', () => {
     }
 
     expect(rows).toHaveLength(SCENARIOS.length);
+    expect(rows.every((row) => Number(row.monitorCount) >= Number(row.dueCount))).toBe(true);
   }, 120_000);
 });
