@@ -456,3 +456,23 @@ The legacy sharded/fragment implementation remains in the repository for larger 
 - Feature, performance, sync, and hotfix branches must start from current `master`.
 - `feature/extended-monitoring` is historical and deprecated. Do not deploy it and do not merge it wholesale.
 - Temporary production diagnostics should use the permanent manual D1 diagnostics workflow rather than commits that add/remove ad-hoc workflows.
+
+
+## Runtime profiles
+
+The fork centralizes deployment defaults behind `UPTIMER_PROFILE` while preserving individual
+`UPTIMER_*` environment variables as explicit overrides.
+
+| Profile | Intended use | Public snapshot cadence | Snapshot pipeline |
+| --- | --- | ---: | --- |
+| `low-write` | Cloudflare Free Plan / small deployments | 300s | Aggregate snapshots; fragment/sharded writes off |
+| `balanced` | General deployments | 60s | Aggregate snapshots; fragment/sharded writes off |
+| `high-scale` | Larger monitor sets | 60s | Fragment/sharded pipeline on |
+
+Production selects `UPTIMER_PROFILE=low-write`. In this profile, idle one-minute Cron ticks do not
+rewrite homepage/status snapshots. Successful monitor-check ticks refresh them immediately, while
+admin monitor/settings/incident/maintenance mutations still use forced refreshes. The
+`UPTIMER_PUBLIC_SNAPSHOT_FRESHNESS_SECONDS` override can tune the scheduled cadence independently.
+
+Do not auto-switch profiles based only on monitor count. Select a profile explicitly and validate it
+with the manual D1 Diagnostics workflow before and after changes.
