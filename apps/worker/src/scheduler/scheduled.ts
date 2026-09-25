@@ -13,6 +13,7 @@ import type { Env } from '../env';
 import {
   readInternalScheduledBatchSize,
   readProfileBoolean,
+  readUptimerProfile,
 } from '../config/profile';
 import { runInternalHomepageRefreshCore } from '../internal/homepage-refresh-core';
 import type { Trace } from '../observability/trace';
@@ -1974,7 +1975,13 @@ export async function runScheduledTick(env: Env, ctx: ExecutionContext): Promise
       console.log('scheduled: idle no runnable monitors');
     }
     await initializeNotifications();
-    ctx.waitUntil(queueHomepageRefresh());
+
+    // Low-write deployments refresh public snapshots on monitor checks and on
+    // explicit admin invalidations. Idle Cron ticks should not rewrite the same
+    // public state every minute.
+    if (readUptimerProfile(env) !== 'low-write') {
+      ctx.waitUntil(queueHomepageRefresh());
+    }
   };
 
   // Most Cron ticks are idle when monitor intervals are longer than one minute.
