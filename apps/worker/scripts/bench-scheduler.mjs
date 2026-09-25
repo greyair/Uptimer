@@ -18,8 +18,10 @@ const repoRoot = path.resolve(workerRoot, '..', '..');
 
 const benchConfigRelativePath = path.join('apps', 'worker', 'vitest.bench.config.ts');
 const benchFileRelativePath = path.join('apps', 'worker', 'test', 'scheduled.bench.ts');
+const fakeD1RelativePath = path.join('apps', 'worker', 'test', 'helpers', 'fake-d1.ts');
 const currentBenchConfigPath = path.join(repoRoot, benchConfigRelativePath);
 const currentBenchFilePath = path.join(repoRoot, benchFileRelativePath);
+const currentFakeD1Path = path.join(repoRoot, fakeD1RelativePath);
 const vitestEntrypoint = path.join(workerRoot, 'node_modules', 'vitest', 'vitest.mjs');
 
 const currentRootNodeModules = path.join(repoRoot, 'node_modules');
@@ -71,6 +73,10 @@ function ensureTreeDependencies(treeRoot) {
   });
   cpSync(currentBenchConfigPath, path.join(treeRoot, benchConfigRelativePath), { force: true });
   cpSync(currentBenchFilePath, path.join(treeRoot, benchFileRelativePath), { force: true });
+  // Benchmark fixtures are part of the harness, not the implementation under
+  // comparison. Overlay the same instrumented fake D1 helper in both trees so
+  // baseline/current operation counters have identical semantics.
+  cpSync(currentFakeD1Path, path.join(treeRoot, fakeD1RelativePath), { force: true });
 }
 
 function listTrackedWorkingTreeChanges() {
