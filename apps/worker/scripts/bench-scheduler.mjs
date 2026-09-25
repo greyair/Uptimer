@@ -54,7 +54,7 @@ function sanitizeLabel(raw) {
 
 function resolveBaselineRef() {
   return (
-    process.env.SCHEDULER_BENCH_BASE_REF ?? 'aef3f045c4c694f8440d08ba020548eed94f82db'
+    process.env.SCHEDULER_BENCH_BASE_REF ?? '053ff1f7dd525e9845166de96c9effe0e697af72'
   );
 }
 
@@ -162,6 +162,8 @@ function summarizeComparison(baselineRows, currentRows) {
       baselineP95Ms: baselineRow.p95Ms.toFixed(3),
       currentP95Ms: currentRow.p95Ms.toFixed(3),
       batchCalls: `${baselineRow.batchCallsAvg} -> ${currentRow.batchCallsAvg}`,
+      statements: `${baselineRow.statementCountAvg} -> ${currentRow.statementCountAvg}`,
+      waitUntil: `${baselineRow.waitUntilCallsAvg} -> ${currentRow.waitUntilCallsAvg}`,
     };
   });
 }
