@@ -199,6 +199,7 @@ Default addresses:
 | [Configuration Reference](docs/configuration-reference.md) ([中文](docs/configuration-reference.zh-CN.md)) | All configurable parameters (secrets, variables, settings) |
 | [Notification System](docs/notifications.md) ([中文](docs/notifications.zh-CN.md))                         | Webhook setup, templates, signatures, troubleshooting      |
 | [Extended Monitoring](docs/extended-monitoring.md)                                                         | Globalping, SSL/RDAP expiry checks, WPush, migration notes  |
+| [Fork Roadmap](docs/fork-roadmap.md)                                                                   | Fork-specific maintenance, scale validation, and optimization plan |
 | [MCP](docs/mcp.md)                                                                                          | Remote MCP endpoint, authentication, tools and examples     |
 | [Local Development](Develop/LOCAL-TESTING.md)                                                              | Local setup, seed data, testing procedures                 |
 
