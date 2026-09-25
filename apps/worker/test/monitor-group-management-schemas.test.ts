@@ -68,4 +68,14 @@ describe('monitor group management schemas', () => {
 
     expect(patchResult.success).toBe(false);
   });
+
+  it('allows clearing Globalping locations when editing a direct monitor', () => {
+    const patchResult = patchMonitorInputSchema.safeParse({
+      name: 'Renamed monitor',
+      probe_mode: 'direct',
+      globalping_locations: [],
+    });
+
+    expect(patchResult.success).toBe(true);
+  });
 });
