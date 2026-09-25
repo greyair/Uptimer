@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -42,7 +44,9 @@ jobs:
           SCHEDULER_BENCH_RUNS: '8'
           SCHEDULER_BENCH_WARMUPS: '2'
           SCHEDULER_BENCH_WRITE_JSON: p2-scale-results.json
-        run: pnpm --filter @uptimer/worker bench:scheduler | tee p2-scale-output.txt
+        run: |
+          set -o pipefail
+          pnpm --filter @uptimer/worker bench:scheduler | tee p2-scale-output.txt
 
       - name: Publish benchmark summary
         if: always()
