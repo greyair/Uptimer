@@ -18,8 +18,10 @@ const repoRoot = path.resolve(workerRoot, '..', '..');
 
 const benchConfigRelativePath = path.join('apps', 'worker', 'vitest.bench.config.ts');
 const benchFileRelativePath = path.join('apps', 'worker', 'test', 'scheduled.bench.ts');
+const fakeD1RelativePath = path.join('apps', 'worker', 'test', 'helpers', 'fake-d1.ts');
 const currentBenchConfigPath = path.join(repoRoot, benchConfigRelativePath);
 const currentBenchFilePath = path.join(repoRoot, benchFileRelativePath);
+const currentFakeD1Path = path.join(repoRoot, fakeD1RelativePath);
 const vitestEntrypoint = path.join(workerRoot, 'node_modules', 'vitest', 'vitest.mjs');
 
 const currentRootNodeModules = path.join(repoRoot, 'node_modules');
@@ -54,7 +56,7 @@ function sanitizeLabel(raw) {
 
 function resolveBaselineRef() {
   return (
-    process.env.SCHEDULER_BENCH_BASE_REF ?? 'aef3f045c4c694f8440d08ba020548eed94f82db'
+    process.env.SCHEDULER_BENCH_BASE_REF ?? '053ff1f7dd525e9845166de96c9effe0e697af72'
   );
 }
 
@@ -71,6 +73,10 @@ function ensureTreeDependencies(treeRoot) {
   });
   cpSync(currentBenchConfigPath, path.join(treeRoot, benchConfigRelativePath), { force: true });
   cpSync(currentBenchFilePath, path.join(treeRoot, benchFileRelativePath), { force: true });
+  // Benchmark fixtures are part of the harness, not the implementation under
+  // comparison. Overlay the same instrumented fake D1 helper in both trees so
+  // baseline/current operation counters have identical semantics.
+  cpSync(currentFakeD1Path, path.join(treeRoot, fakeD1RelativePath), { force: true });
 }
 
 function listTrackedWorkingTreeChanges() {
@@ -162,6 +168,14 @@ function summarizeComparison(baselineRows, currentRows) {
       baselineP95Ms: baselineRow.p95Ms.toFixed(3),
       currentP95Ms: currentRow.p95Ms.toFixed(3),
       batchCalls: `${baselineRow.batchCallsAvg} -> ${currentRow.batchCallsAvg}`,
+      statements: `${baselineRow.statementCountAvg} -> ${currentRow.statementCountAvg}`,
+      waitUntil: `${baselineRow.waitUntilCallsAvg} -> ${currentRow.waitUntilCallsAvg}`,
+      d1Reads: `${baselineRow.d1ReadsAvg} -> ${currentRow.d1ReadsAvg}`,
+      d1Writes: `${baselineRow.d1WritesAvg} -> ${currentRow.d1WritesAvg}`,
+      lockWrites: `${baselineRow.lockWritesAvg} -> ${currentRow.lockWritesAvg}`,
+      checkWrites: `${baselineRow.checkResultWritesAvg} -> ${currentRow.checkResultWritesAvg}`,
+      stateWrites: `${baselineRow.stateWritesAvg} -> ${currentRow.stateWritesAvg}`,
+      snapshotWrites: `${baselineRow.snapshotWritesAvg} -> ${currentRow.snapshotWritesAvg}`,
     };
   });
 }

@@ -67,9 +67,21 @@ Production validation (2026-09-25):
 
 ### P2.1 — Synthetic 10 / 25 / 50 monitor scale benchmark
 
+**Status: complete**
+
 Goal: establish measured profile/capacity guidance instead of guessing thresholds.
 
-Tasks:
+Final report: [P2.1 Scheduler Scale Benchmark](benchmarks/p2-scale.md).
+
+Measured inline scheduler results (2026-09-25):
+
+- 50 active / 10 due staggered tick: 36 synthetic D1 read operations and 5 writes.
+- 50 active / 50 due burst tick: 76 synthetic D1 read operations and 13 writes.
+- Baseline/current operation counts match after applying identical harness instrumentation.
+- No nonlinear scheduler/storage amplification was observed through 50 monitors.
+- Full `high-scale` SELF/service/sharded behavior is explicitly outside this microbenchmark and requires a separate integration benchmark.
+
+Delivered tasks:
 
 - Add a deterministic synthetic benchmark harness that can model 10, 25, and 50 active monitors.
 - Cover both:

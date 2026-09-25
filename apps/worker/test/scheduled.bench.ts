@@ -11,11 +11,18 @@ vi.mock('../src/monitor/tcp', () => ({
 
 import type { Env } from '../src/env';
 import { runScheduledTick } from '../src/scheduler/scheduled';
-import { createFakeD1Database, type FakeD1QueryHandler } from './helpers/fake-d1';
+import {
+  createFakeD1Database,
+  type FakeD1ExecutionObserver,
+  type FakeD1QueryHandler,
+} from './helpers/fake-d1';
 
 type Scenario = {
   name: string;
   monitorCount: number;
+  dueCount: number;
+  schedule: 'staggered' | 'burst';
+  profile: 'low-write' | 'balanced' | 'high-scale';
   withChannel: boolean;
 };
 
@@ -24,16 +31,47 @@ type Sample = {
   batchCalls: number;
   statementCount: number;
   waitUntilCalls: number;
+  d1Reads: number;
+  d1Writes: number;
+  lockWrites: number;
+  checkResultWrites: number;
+  stateWrites: number;
+  snapshotWrites: number;
+  serviceCalls: number;
 };
 
 const BENCH_LABEL = process.env.SCHEDULER_BENCH_LABEL ?? 'current-working-tree';
 const OUTPUT_PATH = process.env.SCHEDULER_BENCH_OUTPUT ?? null;
 
-const SCENARIOS: Scenario[] = [
-  { name: '1000 due monitors / no channels', monitorCount: 1000, withChannel: false },
-  { name: '5000 due monitors / no channels', monitorCount: 5000, withChannel: false },
-  { name: '5000 due monitors / 1 webhook channel', monitorCount: 5000, withChannel: true },
-];
+const MONITOR_COUNTS = [10, 25, 50] as const;
+const PROFILES = ['low-write', 'balanced', 'high-scale'] as const;
+
+const SCENARIOS: Scenario[] = PROFILES.flatMap((profile) =>
+  MONITOR_COUNTS.flatMap((monitorCount) => {
+    // Production monitors are close to a five-minute cadence. A staggered minute
+    // therefore has roughly one fifth of the fleet due, while burst models the
+    // worst case where the whole fleet becomes due on the same Cron tick.
+    const staggeredDueCount = Math.max(1, Math.ceil(monitorCount / 5));
+    return [
+      {
+        name: `${profile} / ${monitorCount} monitors / staggered (${staggeredDueCount} due)`,
+        monitorCount,
+        dueCount: staggeredDueCount,
+        schedule: 'staggered' as const,
+        profile,
+        withChannel: false,
+      },
+      {
+        name: `${profile} / ${monitorCount} monitors / burst (all due)`,
+        monitorCount,
+        dueCount: monitorCount,
+        schedule: 'burst' as const,
+        profile,
+        withChannel: false,
+      },
+    ];
+  }),
+);
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -56,7 +94,7 @@ function makeDueRows(count: number) {
     type: 'unsupported',
     target: `benchmark-target-${index + 1}`,
     group_name: index % 2 === 0 ? 'Core' : 'Edge',
-    interval_sec: 60,
+    interval_sec: 300,
     created_at: 1_700_000_000 - 40 * 86_400,
     timeout_ms: 5000,
     http_method: null,
@@ -84,8 +122,16 @@ function createEnvForScenario(scenario: Scenario): {
     batchCalls: 0,
     statementCount: 0,
     waitUntilCalls: 0,
+    d1Reads: 0,
+    d1Writes: 0,
+    lockWrites: 0,
+    checkResultWrites: 0,
+    stateWrites: 0,
+    snapshotWrites: 0,
+    serviceCalls: 0,
   };
-  const dueRows = makeDueRows(scenario.monitorCount);
+  const allRows = makeDueRows(scenario.monitorCount);
+  const dueRows = allRows.slice(0, scenario.dueCount);
   let homepageArtifactGeneratedAt = 0;
   const channels = scenario.withChannel
     ? [
@@ -154,6 +200,27 @@ function createEnvForScenario(scenario: Scenario): {
       }),
     },
     {
+      // The P1 runtime uses the bounded per-monitor heartbeat query, while
+      // older benchmark fixtures only modeled the previous ROW_NUMBER form.
+      // Keep both shapes in the shared P2 harness so baseline and current
+      // implementations are measured against identical synthetic data.
+      match: (sql) =>
+        sql.includes('from check_results') &&
+        sql.includes('where monitor_id = ?1') &&
+        sql.includes('order by checked_at desc, id desc') &&
+        sql.includes('limit ?2'),
+      all: (args) => {
+        const monitorId = Number(args[0] ?? 0);
+        const limit = Math.max(0, Number(args[1] ?? 30));
+        return Array.from({ length: limit }, (_, index) => ({
+          monitor_id: monitorId,
+          checked_at: 1_700_000_000 - (index + 1) * 60,
+          status: 'up',
+          latency_ms: 40 + ((monitorId + index) % 50),
+        }));
+      },
+    },
+    {
       match: 'row_number() over',
       all: () =>
         dueRows.slice(0, 12).flatMap((row) =>
@@ -178,6 +245,35 @@ function createEnvForScenario(scenario: Scenario): {
             uptime_sec: 86_400,
           })),
         ),
+    },
+    {
+      // P1's legacy today-uptime fallback reads overlapping outages when a
+      // runtime snapshot must be rebuilt. Stable synthetic monitors have none.
+      match: 'from outages',
+      all: () => [],
+    },
+    {
+      // The same P1 fallback reads the current-day check stream in one
+      // monitor-id batch. Return stable "up" checks for the requested ids.
+      match: (sql) =>
+        sql.includes('from check_results') &&
+        sql.includes('where monitor_id in (') &&
+        sql.includes('and checked_at >=') &&
+        sql.includes('and checked_at <') &&
+        sql.includes('order by monitor_id, checked_at'),
+      all: (args) => {
+        const monitorIds = args
+          .slice(0, Math.max(0, args.length - 2))
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value));
+        return monitorIds.flatMap((monitorId) =>
+          Array.from({ length: 12 }, (_, index) => ({
+            monitor_id: monitorId,
+            checked_at: 1_700_000_000 - (11 - index) * 300,
+            status: 'up',
+          })),
+        );
+      },
     },
     {
       match: 'from public_snapshots',
@@ -216,7 +312,36 @@ function createEnvForScenario(scenario: Scenario): {
     },
   ];
 
-  const db = createFakeD1Database(handlers);
+  const observer: FakeD1ExecutionObserver = {
+    onExecute(method, normalizedSql) {
+      const isWrite = method === 'run';
+      if (isWrite) {
+        sampleState.d1Writes += 1;
+        if (
+          normalizedSql.includes('into locks') ||
+          normalizedSql.includes('delete from locks') ||
+          normalizedSql.includes('update locks')
+        ) {
+          sampleState.lockWrites += 1;
+        }
+        if (normalizedSql.includes('insert into check_results')) {
+          sampleState.checkResultWrites += 1;
+        }
+        if (normalizedSql.includes('insert into monitor_state')) {
+          sampleState.stateWrites += 1;
+        }
+        if (
+          normalizedSql.includes('insert into public_snapshots') ||
+          normalizedSql.includes('insert into public_snapshot_fragments')
+        ) {
+          sampleState.snapshotWrites += 1;
+        }
+      } else {
+        sampleState.d1Reads += 1;
+      }
+    },
+  };
+  const db = createFakeD1Database(handlers, observer);
   const originalBatch = db.batch.bind(db);
   db.batch = async (statements) => {
     sampleState.batchCalls += 1;
@@ -225,7 +350,11 @@ function createEnvForScenario(scenario: Scenario): {
   };
 
   return {
-    env: { DB: db } as unknown as Env,
+    env: {
+      DB: db,
+      UPTIMER_PROFILE: scenario.profile,
+      UPTIMER_SCHEDULED_REFRESH_LOGS: '0',
+    } as unknown as Env,
     sampleState,
   };
 }
@@ -277,6 +406,15 @@ function summarize(samples: Sample[]) {
   const batchCalls = samples.map((sample) => sample.batchCalls);
   const statementCounts = samples.map((sample) => sample.statementCount);
   const waitUntilCalls = samples.map((sample) => sample.waitUntilCalls);
+  const d1Reads = samples.map((sample) => sample.d1Reads);
+  const d1Writes = samples.map((sample) => sample.d1Writes);
+  const lockWrites = samples.map((sample) => sample.lockWrites);
+  const checkResultWrites = samples.map((sample) => sample.checkResultWrites);
+  const stateWrites = samples.map((sample) => sample.stateWrites);
+  const snapshotWrites = samples.map((sample) => sample.snapshotWrites);
+  const serviceCalls = samples.map((sample) => sample.serviceCalls);
+  const average = (values: number[]) =>
+    values.reduce((sum, value) => sum + value, 0) / values.length;
   const totalElapsed = elapsed.reduce((sum, value) => sum + value, 0);
 
   return {
@@ -289,8 +427,14 @@ function summarize(samples: Sample[]) {
     batchCallsAvg: batchCalls.reduce((sum, value) => sum + value, 0) / batchCalls.length,
     statementCountAvg:
       statementCounts.reduce((sum, value) => sum + value, 0) / statementCounts.length,
-    waitUntilCallsAvg:
-      waitUntilCalls.reduce((sum, value) => sum + value, 0) / waitUntilCalls.length,
+    waitUntilCallsAvg: average(waitUntilCalls),
+    d1ReadsAvg: average(d1Reads),
+    d1WritesAvg: average(d1Writes),
+    lockWritesAvg: average(lockWrites),
+    checkResultWritesAvg: average(checkResultWrites),
+    stateWritesAvg: average(stateWrites),
+    snapshotWritesAvg: average(snapshotWrites),
+    serviceCallsAvg: average(serviceCalls),
   };
 }
 
@@ -308,6 +452,9 @@ async function benchmarkScenario(scenario: Scenario) {
     label: BENCH_LABEL,
     scenario: scenario.name,
     monitorCount: scenario.monitorCount,
+    dueCount: scenario.dueCount,
+    schedule: scenario.schedule,
+    profile: scenario.profile,
     withChannel: scenario.withChannel,
     ...summarize(samples),
   };
@@ -331,5 +478,6 @@ describe('scheduler benchmark', () => {
     }
 
     expect(rows).toHaveLength(SCENARIOS.length);
+    expect(rows.every((row) => Number(row.monitorCount) >= Number(row.dueCount))).toBe(true);
   }, 120_000);
 });
