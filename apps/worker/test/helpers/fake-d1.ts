@@ -1,5 +1,9 @@
 type QueryMatcher = string | RegExp | ((normalizedSql: string) => boolean);
 
+export type FakeD1ExecutionObserver = {
+  onExecute?: (method: 'all' | 'first' | 'raw' | 'run', normalizedSql: string) => void;
+};
+
 export type FakeD1QueryHandler = {
   match: QueryMatcher;
   all?: (args: unknown[], normalizedSql: string) => unknown[] | Promise<unknown[]>;
@@ -46,13 +50,19 @@ class FakePreparedStatement {
   constructor(
     private readonly sql: string,
     private readonly handlers: FakeD1QueryHandler[],
+    private readonly observer?: FakeD1ExecutionObserver,
     normalizedSql?: string,
   ) {
     this.normalizedSql = normalizedSql ?? normalizeSql(sql);
   }
 
   bind(...args: unknown[]): FakePreparedStatement {
-    const bound = new FakePreparedStatement(this.sql, this.handlers, this.normalizedSql);
+    const bound = new FakePreparedStatement(
+      this.sql,
+      this.handlers,
+      this.observer,
+      this.normalizedSql,
+    );
     bound.args = args;
     return bound;
   }
@@ -60,6 +70,7 @@ class FakePreparedStatement {
   async all<T = unknown>(): Promise<{ results: T[] }> {
     const handler = this.handlers.find((item) => item.all && matchesQuery(this.normalizedSql, item.match));
     if (handler?.all) {
+      this.observer?.onExecute?.('all', this.normalizedSql);
       const rows = await handler.all(this.args, this.normalizedSql);
       return { results: (rows ?? []) as T[] };
     }
@@ -71,6 +82,7 @@ class FakePreparedStatement {
       throw new Error(`No fake D1 all() handler matched SQL: ${this.sql}`);
     }
 
+    this.observer?.onExecute?.('all', this.normalizedSql);
     const rows: unknown[] = [];
     if (this.args.length > 0) {
       for (const arg of this.args) {
@@ -98,6 +110,7 @@ class FakePreparedStatement {
     if (!handler || !handler.first) {
       throw new Error(`No fake D1 first() handler matched SQL: ${this.sql}`);
     }
+    this.observer?.onExecute?.('first', this.normalizedSql);
     const row = await handler.first(this.args, this.normalizedSql);
     return (row ?? null) as T | null;
   }
@@ -105,12 +118,14 @@ class FakePreparedStatement {
   async raw<T = unknown>(): Promise<T[]> {
     const rawHandler = this.handlers.find((item) => item.raw && matchesQuery(this.normalizedSql, item.match));
     if (rawHandler?.raw) {
+      this.observer?.onExecute?.('raw', this.normalizedSql);
       const rows = await rawHandler.raw(this.args, this.normalizedSql);
       return (rows ?? []) as T[];
     }
 
     const allHandler = this.handlers.find((item) => item.all && matchesQuery(this.normalizedSql, item.match));
     if (allHandler?.all) {
+      this.observer?.onExecute?.('raw', this.normalizedSql);
       const rows = await allHandler.all(this.args, this.normalizedSql);
       return (rows ?? []).map(toRawRow) as T[];
     }
@@ -119,6 +134,7 @@ class FakePreparedStatement {
       (item) => item.first && matchesQuery(this.normalizedSql, item.match),
     );
     if (firstHandler?.first) {
+      this.observer?.onExecute?.('raw', this.normalizedSql);
       const row = await firstHandler.first(this.args, this.normalizedSql);
       return row === null ? [] : ([toRawRow(row)] as T[]);
     }
@@ -132,6 +148,7 @@ class FakePreparedStatement {
       throw new Error(`No fake D1 run() handler matched SQL: ${this.sql}`);
     }
 
+    this.observer?.onExecute?.('run', this.normalizedSql);
     const outcome = await handler.run(this.args, this.normalizedSql);
     if (typeof outcome === 'number') {
       return {
@@ -177,10 +194,13 @@ function withSyntheticKey(row: unknown, key: unknown): unknown {
   return row;
 }
 
-export function createFakeD1Database(handlers: FakeD1QueryHandler[]): D1Database {
+export function createFakeD1Database(
+  handlers: FakeD1QueryHandler[],
+  observer?: FakeD1ExecutionObserver,
+): D1Database {
   return {
     prepare(sql: string) {
-      return new FakePreparedStatement(sql, handlers) as unknown as D1PreparedStatement;
+      return new FakePreparedStatement(sql, handlers, observer) as unknown as D1PreparedStatement;
     },
     async batch<T = unknown>(statements: D1PreparedStatement[]) {
       const results: D1Result<T>[] = [];
