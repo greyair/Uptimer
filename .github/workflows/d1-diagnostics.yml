@@ -83,6 +83,26 @@ jobs:
           echo '=== MONITOR STATE ==='
           pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
             --command "SELECT COUNT(*) AS monitor_states, MIN(last_checked_at) AS oldest_last_checked_at, MAX(last_checked_at) AS newest_last_checked_at, datetime(MIN(last_checked_at), 'unixepoch') AS oldest_checked_utc, datetime(MAX(last_checked_at), 'unixepoch') AS newest_checked_utc FROM monitor_state;" --json
+      - name: Globalping persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.window }}" in
+            1h) WINDOW_SECONDS=3600 ;;
+            6h) WINDOW_SECONDS=21600 ;;
+            24h) WINDOW_SECONDS=86400 ;;
+            *) echo "Unsupported window: ${{ inputs.window }}" >&2; exit 1 ;;
+          esac
+          CUTOFF_EXPR="CAST(strftime('%s','now') AS INTEGER) - ${WINDOW_SECONDS}"
+
+          echo "=== GLOBALPING_PERSISTENCE_${{ inputs.window }} ==="
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "SELECT m.id AS monitor_id, m.name, m.interval_sec, e.globalping_last_checked_at, datetime(e.globalping_last_checked_at, 'unixepoch') AS latest_checked_utc, e.globalping_history_last_written_at, datetime(e.globalping_history_last_written_at, 'unixepoch') AS history_last_written_utc, (SELECT COUNT(*) FROM check_results cr WHERE cr.monitor_id = m.id AND cr.checked_at >= ${CUTOFF_EXPR}) AS checks_in_window, (SELECT COUNT(*) FROM globalping_history gh WHERE gh.monitor_id = m.id AND gh.checked_at >= ${CUTOFF_EXPR}) AS history_rows_in_window, (SELECT MIN(gh.checked_at) FROM globalping_history gh WHERE gh.monitor_id = m.id AND gh.checked_at >= ${CUTOFF_EXPR}) AS first_history_at, datetime((SELECT MIN(gh.checked_at) FROM globalping_history gh WHERE gh.monitor_id = m.id AND gh.checked_at >= ${CUTOFF_EXPR}), 'unixepoch') AS first_history_utc, (SELECT MAX(gh.checked_at) FROM globalping_history gh WHERE gh.monitor_id = m.id AND gh.checked_at >= ${CUTOFF_EXPR}) AS last_history_at, datetime((SELECT MAX(gh.checked_at) FROM globalping_history gh WHERE gh.monitor_id = m.id AND gh.checked_at >= ${CUTOFF_EXPR}), 'unixepoch') AS last_history_utc FROM monitors m JOIN monitor_extensions e ON e.monitor_id = m.id WHERE m.is_active = 1 AND e.probe_mode = 'globalping' ORDER BY m.id;" --json
+
+          echo "=== GLOBALPING_HISTORY_INTERVALS_${{ inputs.window }} ==="
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "WITH history AS (SELECT gh.monitor_id, gh.checked_at, gh.checked_at - LAG(gh.checked_at) OVER (PARTITION BY gh.monitor_id ORDER BY gh.checked_at) AS gap_sec FROM globalping_history gh JOIN monitor_extensions e ON e.monitor_id = gh.monitor_id WHERE e.probe_mode = 'globalping' AND gh.checked_at >= ${CUTOFF_EXPR}), gaps AS (SELECT monitor_id, gap_sec FROM history WHERE gap_sec IS NOT NULL) SELECT m.id AS monitor_id, m.name, COUNT(g.gap_sec) AS interval_count, MIN(g.gap_sec) AS min_gap_sec, ROUND(AVG(g.gap_sec), 1) AS avg_gap_sec, MAX(g.gap_sec) AS max_gap_sec, SUM(CASE WHEN g.gap_sec < 900 THEN 1 ELSE 0 END) AS gaps_under_15m, SUM(CASE WHEN g.gap_sec >= 900 THEN 1 ELSE 0 END) AS gaps_at_or_over_15m FROM monitors m JOIN monitor_extensions e ON e.monitor_id = m.id LEFT JOIN gaps g ON g.monitor_id = m.id WHERE m.is_active = 1 AND e.probe_mode = 'globalping' GROUP BY m.id, m.name ORDER BY m.id;" --json
+
       - name: Top rows written
         run: |
           echo "=== WRITES_${{ inputs.window }} ==="
