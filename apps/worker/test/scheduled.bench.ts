@@ -229,6 +229,12 @@ function createEnvForScenario(scenario: Scenario): {
         ),
     },
     {
+      // P1's legacy today-uptime fallback reads overlapping outages when a
+      // runtime snapshot must be rebuilt. Stable synthetic monitors have none.
+      match: 'from outages',
+      all: () => [],
+    },
+    {
       match: 'from public_snapshots',
       first: (args) =>
         args[0] === 'homepage:artifact' && homepageArtifactGeneratedAt > 0
