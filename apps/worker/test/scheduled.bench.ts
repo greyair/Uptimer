@@ -182,6 +182,27 @@ function createEnvForScenario(scenario: Scenario): {
       }),
     },
     {
+      // The P1 runtime uses the bounded per-monitor heartbeat query, while
+      // older benchmark fixtures only modeled the previous ROW_NUMBER form.
+      // Keep both shapes in the shared P2 harness so baseline and current
+      // implementations are measured against identical synthetic data.
+      match: (sql) =>
+        sql.includes('from check_results') &&
+        sql.includes('where monitor_id = ?1') &&
+        sql.includes('order by checked_at desc, id desc') &&
+        sql.includes('limit ?2'),
+      all: (args) => {
+        const monitorId = Number(args[0] ?? 0);
+        const limit = Math.max(0, Number(args[1] ?? 30));
+        return Array.from({ length: limit }, (_, index) => ({
+          monitor_id: monitorId,
+          checked_at: 1_700_000_000 - (index + 1) * 60,
+          status: 'up',
+          latency_ms: 40 + ((monitorId + index) % 50),
+        }));
+      },
+    },
+    {
       match: 'row_number() over',
       all: () =>
         dueRows.slice(0, 12).flatMap((row) =>
