@@ -558,6 +558,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now,
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
     expect(computePublicHomepagePayload).not.toHaveBeenCalled();
@@ -611,6 +612,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now,
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
     expect(dispatchWebhookToChannels).toHaveBeenCalledWith(
@@ -1623,6 +1625,7 @@ describe('scheduler/scheduled regression', () => {
         db: env.DB,
         now: Math.floor(Date.now() / 1000),
         compute: expect.any(Function),
+        minRefreshIntervalSeconds: 60,
         seedDataSnapshot: true,
       });
     } finally {
@@ -1678,6 +1681,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now: Math.floor(Date.now() / 1000),
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
   });
@@ -1709,6 +1713,7 @@ describe('scheduler/scheduled regression', () => {
         db: env.DB,
         now: delayedNow,
         compute: expect.any(Function),
+        minRefreshIntervalSeconds: 60,
         seedDataSnapshot: true,
       });
     } finally {
