@@ -1,0 +1,99 @@
+name: D1 Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      window:
+        description: Query Insights time window
+        required: true
+        default: 1h
+        type: choice
+        options:
+          - 1h
+          - 6h
+          - 24h
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.8.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Resolve Cloudflare Account ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
+          if [[ -z "$ACCOUNT_ID" ]]; then
+            ACCOUNT_ID="$(
+              curl -fsSL "https://api.cloudflare.com/client/v4/accounts" \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+              | jq -r '.result[0].id'
+            )"
+          fi
+          test -n "$ACCOUNT_ID"
+          test "$ACCOUNT_ID" != "null"
+          echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+      - name: Resolve D1 database
+        shell: bash
+        run: |
+          set -euo pipefail
+          D1_ID="$(
+            pnpm --filter @uptimer/worker exec wrangler d1 list --json \
+            | jq -r 'map(select(.name == "uptimer")) | .[0].uuid // .[0].id // empty'
+          )"
+          test -n "$D1_ID"
+          cat > /tmp/wrangler-d1-diagnostics.toml <<EOF
+          name = "uptimer-d1-diagnostics"
+          compatibility_date = "2026-01-28"
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "uptimer"
+          database_id = "$D1_ID"
+          EOF
+      - name: Runtime state
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== MONITORS ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "SELECT id, name, interval_sec, is_active FROM monitors ORDER BY id;" --json
+          echo '=== FRAGMENT LAST WRITE ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "SELECT COUNT(*) AS fragment_count, MAX(updated_at) AS max_updated_at, datetime(MAX(updated_at), 'unixepoch') AS max_updated_utc FROM public_snapshot_fragments;" --json
+          echo '=== SNAPSHOT FRESHNESS ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "SELECT key, generated_at, datetime(generated_at, 'unixepoch') AS generated_utc, CAST(strftime('%s','now') AS INTEGER) - generated_at AS age_sec, updated_at, datetime(updated_at, 'unixepoch') AS updated_utc FROM public_snapshots ORDER BY key;" --json
+          echo '=== MONITOR STATE ==='
+          pnpm --filter @uptimer/worker exec wrangler d1 execute uptimer --remote --config /tmp/wrangler-d1-diagnostics.toml \
+            --command "SELECT COUNT(*) AS monitor_states, MIN(last_checked_at) AS oldest_last_checked_at, MAX(last_checked_at) AS newest_last_checked_at, datetime(MIN(last_checked_at), 'unixepoch') AS oldest_checked_utc, datetime(MAX(last_checked_at), 'unixepoch') AS newest_checked_utc FROM monitor_state;" --json
+      - name: Top rows written
+        run: |
+          echo "=== WRITES_${{ inputs.window }} ==="
+          pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
+            --config /tmp/wrangler-d1-diagnostics.toml \
+            --time-period=${{ inputs.window }} \
+            --sort-type=sum --sort-by=writes --sort-direction=DESC --limit=20 --json
+      - name: Top rows read
+        run: |
+          echo "=== READS_${{ inputs.window }} ==="
+          pnpm --filter @uptimer/worker exec wrangler d1 insights uptimer \
+            --config /tmp/wrangler-d1-diagnostics.toml \
+            --time-period=${{ inputs.window }} \
+            --sort-type=sum --sort-by=reads --sort-direction=DESC --limit=20 --json
