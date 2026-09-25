@@ -596,6 +596,31 @@ describe('snapshots/public-homepage', () => {
     expect(compute).not.toHaveBeenCalled();
   });
 
+  it('can skip refreshes inside a profile-defined cadence', async () => {
+    const now = 1_728_000_240;
+    const db = createFakeD1Database([
+      {
+        match: 'from public_snapshots',
+        first: () => ({
+          generated_at: now - 120,
+          body_json: JSON.stringify(samplePayload(now - 120)),
+        }),
+      },
+    ]);
+
+    const compute = vi.fn(async () => samplePayload(now));
+    const refreshed = await refreshPublicHomepageSnapshotIfNeeded({
+      db,
+      now,
+      compute,
+      minRefreshIntervalSeconds: 300,
+    });
+
+    expect(refreshed).toBe(false);
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(compute).not.toHaveBeenCalled();
+  });
+
   it('refreshes once when the minute changed and a refresh lease is acquired', async () => {
     vi.mocked(acquireLease).mockResolvedValue(true);
 
