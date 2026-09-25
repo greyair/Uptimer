@@ -506,6 +506,15 @@ describe('scheduler/scheduled regression', () => {
           interval_sec: 300,
           timeout_ms: 10_000,
           http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
           probe_mode: 'globalping',
           globalping_locations_json: JSON.stringify(['Tokyo']),
           globalping_last_results_json: JSON.stringify(previousResults),
@@ -531,7 +540,9 @@ describe('scheduler/scheduled regression', () => {
       regionResults: [{ ...previousResults[0]!, latencyMs: 49 }],
     });
 
-    await runScheduledTick(env, { waitUntil: vi.fn() } as unknown as ExecutionContext);
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
 
     const extensionWrite = writes.find((write) => write.sql.includes('update monitor_extensions'));
     expect(extensionWrite).toBeDefined();
@@ -562,6 +573,15 @@ describe('scheduler/scheduled regression', () => {
           interval_sec: 300,
           timeout_ms: 10_000,
           http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
           probe_mode: 'globalping',
           globalping_locations_json: JSON.stringify(['Tokyo']),
           globalping_last_results_json: JSON.stringify(previousResults),
@@ -578,7 +598,9 @@ describe('scheduler/scheduled regression', () => {
     }) as unknown as Env;
     env.GLOBALPING_API_TOKEN = 'test-globalping-token';
 
-    await runScheduledTick(env, { waitUntil: vi.fn() } as unknown as ExecutionContext);
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
 
     expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
     const extensionWrite = writes.find((write) => write.sql.includes('update monitor_extensions'));
@@ -607,6 +629,15 @@ describe('scheduler/scheduled regression', () => {
           interval_sec: 300,
           timeout_ms: 10_000,
           http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
           probe_mode: 'globalping',
           globalping_locations_json: JSON.stringify(['Tokyo']),
           globalping_last_results_json: JSON.stringify(previousResults),
@@ -640,7 +671,9 @@ describe('scheduler/scheduled regression', () => {
       ],
     });
 
-    await runScheduledTick(env, { waitUntil: vi.fn() } as unknown as ExecutionContext);
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
 
     expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
   });
@@ -667,6 +700,15 @@ describe('scheduler/scheduled regression', () => {
           interval_sec: 300,
           timeout_ms: 10_000,
           http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
           probe_mode: 'globalping',
           globalping_locations_json: JSON.stringify(['Tokyo']),
           globalping_last_results_json: JSON.stringify(previousResults),
@@ -683,7 +725,9 @@ describe('scheduler/scheduled regression', () => {
     }) as unknown as Env;
     env.GLOBALPING_API_TOKEN = 'test-globalping-token';
 
-    await runScheduledTick(env, { waitUntil: vi.fn() } as unknown as ExecutionContext);
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
 
     expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
   });
