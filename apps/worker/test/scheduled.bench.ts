@@ -11,7 +11,11 @@ vi.mock('../src/monitor/tcp', () => ({
 
 import type { Env } from '../src/env';
 import { runScheduledTick } from '../src/scheduler/scheduled';
-import { createFakeD1Database, type FakeD1QueryHandler } from './helpers/fake-d1';
+import {
+  createFakeD1Database,
+  type FakeD1ExecutionObserver,
+  type FakeD1QueryHandler,
+} from './helpers/fake-d1';
 
 type Scenario = {
   name: string;
@@ -27,6 +31,13 @@ type Sample = {
   batchCalls: number;
   statementCount: number;
   waitUntilCalls: number;
+  d1Reads: number;
+  d1Writes: number;
+  lockWrites: number;
+  checkResultWrites: number;
+  stateWrites: number;
+  snapshotWrites: number;
+  serviceCalls: number;
 };
 
 const BENCH_LABEL = process.env.SCHEDULER_BENCH_LABEL ?? 'current-working-tree';
@@ -83,7 +94,7 @@ function makeDueRows(count: number) {
     type: 'unsupported',
     target: `benchmark-target-${index + 1}`,
     group_name: index % 2 === 0 ? 'Core' : 'Edge',
-    interval_sec: 60,
+    interval_sec: 300,
     created_at: 1_700_000_000 - 40 * 86_400,
     timeout_ms: 5000,
     http_method: null,
@@ -111,6 +122,13 @@ function createEnvForScenario(scenario: Scenario): {
     batchCalls: 0,
     statementCount: 0,
     waitUntilCalls: 0,
+    d1Reads: 0,
+    d1Writes: 0,
+    lockWrites: 0,
+    checkResultWrites: 0,
+    stateWrites: 0,
+    snapshotWrites: 0,
+    serviceCalls: 0,
   };
   const allRows = makeDueRows(scenario.monitorCount);
   const dueRows = allRows.slice(0, scenario.dueCount);
@@ -294,7 +312,36 @@ function createEnvForScenario(scenario: Scenario): {
     },
   ];
 
-  const db = createFakeD1Database(handlers);
+  const observer: FakeD1ExecutionObserver = {
+    onExecute(method, normalizedSql) {
+      const isWrite = method === 'run';
+      if (isWrite) {
+        sampleState.d1Writes += 1;
+        if (
+          normalizedSql.includes('into locks') ||
+          normalizedSql.includes('delete from locks') ||
+          normalizedSql.includes('update locks')
+        ) {
+          sampleState.lockWrites += 1;
+        }
+        if (normalizedSql.includes('insert into check_results')) {
+          sampleState.checkResultWrites += 1;
+        }
+        if (normalizedSql.includes('insert into monitor_state')) {
+          sampleState.stateWrites += 1;
+        }
+        if (
+          normalizedSql.includes('insert into public_snapshots') ||
+          normalizedSql.includes('insert into public_snapshot_fragments')
+        ) {
+          sampleState.snapshotWrites += 1;
+        }
+      } else {
+        sampleState.d1Reads += 1;
+      }
+    },
+  };
+  const db = createFakeD1Database(handlers, observer);
   const originalBatch = db.batch.bind(db);
   db.batch = async (statements) => {
     sampleState.batchCalls += 1;
@@ -359,6 +406,15 @@ function summarize(samples: Sample[]) {
   const batchCalls = samples.map((sample) => sample.batchCalls);
   const statementCounts = samples.map((sample) => sample.statementCount);
   const waitUntilCalls = samples.map((sample) => sample.waitUntilCalls);
+  const d1Reads = samples.map((sample) => sample.d1Reads);
+  const d1Writes = samples.map((sample) => sample.d1Writes);
+  const lockWrites = samples.map((sample) => sample.lockWrites);
+  const checkResultWrites = samples.map((sample) => sample.checkResultWrites);
+  const stateWrites = samples.map((sample) => sample.stateWrites);
+  const snapshotWrites = samples.map((sample) => sample.snapshotWrites);
+  const serviceCalls = samples.map((sample) => sample.serviceCalls);
+  const average = (values: number[]) =>
+    values.reduce((sum, value) => sum + value, 0) / values.length;
   const totalElapsed = elapsed.reduce((sum, value) => sum + value, 0);
 
   return {
@@ -371,8 +427,14 @@ function summarize(samples: Sample[]) {
     batchCallsAvg: batchCalls.reduce((sum, value) => sum + value, 0) / batchCalls.length,
     statementCountAvg:
       statementCounts.reduce((sum, value) => sum + value, 0) / statementCounts.length,
-    waitUntilCallsAvg:
-      waitUntilCalls.reduce((sum, value) => sum + value, 0) / waitUntilCalls.length,
+    waitUntilCallsAvg: average(waitUntilCalls),
+    d1ReadsAvg: average(d1Reads),
+    d1WritesAvg: average(d1Writes),
+    lockWritesAvg: average(lockWrites),
+    checkResultWritesAvg: average(checkResultWrites),
+    stateWritesAvg: average(stateWrites),
+    snapshotWritesAvg: average(snapshotWrites),
+    serviceCallsAvg: average(serviceCalls),
   };
 }
 
