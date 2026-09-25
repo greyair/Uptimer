@@ -176,6 +176,8 @@ function summarizeComparison(baselineRows, currentRows) {
       checkWrites: `${baselineRow.checkResultWritesAvg} -> ${currentRow.checkResultWritesAvg}`,
       stateWrites: `${baselineRow.stateWritesAvg} -> ${currentRow.stateWritesAvg}`,
       snapshotWrites: `${baselineRow.snapshotWritesAvg} -> ${currentRow.snapshotWritesAvg}`,
+      globalpingLatestWrites: `${baselineRow.globalpingLatestWritesAvg ?? 0} -> ${currentRow.globalpingLatestWritesAvg ?? 0}`,
+      globalpingHistoryWrites: `${baselineRow.globalpingHistoryWritesAvg ?? 0} -> ${currentRow.globalpingHistoryWritesAvg ?? 0}`,
     };
   });
 }
