@@ -13,6 +13,7 @@ import type { Env } from '../env';
 import {
   readInternalScheduledBatchSize,
   readProfileBoolean,
+  readPublicSnapshotFreshnessSeconds,
   readUptimerProfile,
 } from '../config/profile';
 import { runInternalHomepageRefreshCore } from '../internal/homepage-refresh-core';
@@ -89,6 +90,7 @@ async function refreshHomepageSnapshotInline(env: Env, now: number): Promise<voi
         baseSnapshot: baseSnapshot.snapshot,
         baseSnapshotBodyJson: null,
       }),
+    minRefreshIntervalSeconds: readPublicSnapshotFreshnessSeconds(env),
     seedDataSnapshot: baseSnapshot.seedDataSnapshot,
   });
 }
