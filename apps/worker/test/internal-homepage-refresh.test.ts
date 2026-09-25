@@ -609,6 +609,65 @@ describe('internal homepage refresh route', () => {
     expect(prepareHomepageSnapshotWrite).not.toHaveBeenCalled();
   });
 
+  it('uses the low-write cadence for scheduled refreshes without runtime updates', async () => {
+    const now = 1_776_230_600;
+    vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
+    const baseSnapshot = {
+      ...createBaseSnapshot(now - 120),
+      generated_at: now - 120,
+    };
+    const env = {
+      DB: createFakeD1Database([
+        {
+          match: (sql) =>
+            sql.includes('select key, generated_at, updated_at') &&
+            sql.includes('from public_snapshots') &&
+            !sql.includes('body_json'),
+          all: () => [
+            {
+              key: 'homepage',
+              generated_at: baseSnapshot.generated_at,
+              updated_at: baseSnapshot.generated_at,
+            },
+          ],
+        },
+        {
+          match: 'select generated_at, updated_at, body_json from public_snapshots',
+          first: (args) => {
+            const [key] = args as [string];
+            if (key !== 'homepage') return null;
+            return {
+              generated_at: baseSnapshot.generated_at,
+              updated_at: baseSnapshot.generated_at,
+              body_json: JSON.stringify(baseSnapshot),
+            };
+          },
+        },
+      ]),
+      ADMIN_TOKEN: 'test-admin-token',
+      UPTIMER_PROFILE: 'low-write',
+    } as unknown as Env;
+
+    const res = await worker.fetch(
+      new Request('http://internal/api/v1/internal/refresh/homepage', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-admin-token',
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Uptimer-Refresh-Source': 'scheduled',
+        },
+        body: 'test-admin-token',
+      }),
+      env,
+      { waitUntil: vi.fn() } as unknown as ExecutionContext,
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, refreshed: false });
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(computePublicHomepagePayload).not.toHaveBeenCalled();
+  });
+
   it('normalizes privileged runtime update latency values before fast-path compute', async () => {
     const now = 1_776_230_340;
     vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
