@@ -117,19 +117,6 @@ function bodyJsonBytes(bodyJson: string, enabled: boolean): number | undefined {
   return enabled ? bodyJson.length : undefined;
 }
 
-function isTruthyEnvFlag(value: unknown): boolean {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized === '1' ||
-    normalized === 'true' ||
-    normalized === 'yes' ||
-    normalized === 'on'
-  );
-}
-
 function shouldWriteHomepageArtifactFragments(env: Env): boolean {
   return readProfileBoolean(env, 'UPTIMER_PUBLIC_HOMEPAGE_ARTIFACT_FRAGMENT_WRITES');
 }
