@@ -27,24 +27,15 @@ ADMIN_RATE_LIMIT_WINDOW_SEC = "60"
 UPTIMER_SCHEDULED_STATUS_REFRESH = "1"
 UPTIMER_TRUST_SCHEDULED_RUNTIME_UPDATES = "1"
 
-# Low-write profile for small Cloudflare Free Plan deployments.
-# Keep monitors on the normal aggregate snapshot path and avoid per-monitor
-# fragment/continuation writes that multiply D1 rows_written.
-UPTIMER_INTERNAL_SCHEDULED_BATCH_SIZE = "6"
-UPTIMER_PUBLIC_MONITOR_UPDATE_FRAGMENT_WRITES = "0"
-UPTIMER_SCHEDULED_RUNTIME_FRAGMENT_REFRESH = "0"
-UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED = "0"
-UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED = "0"
-UPTIMER_PUBLIC_SHARDED_ASSEMBLER = "0"
-UPTIMER_SCHEDULED_SHARDED_ASSEMBLER = "0"
-UPTIMER_PUBLIC_SHARDED_SNAPSHOT_PUBLISH = "0"
-UPTIMER_SCHEDULED_SHARDED_PUBLISH = "0"
-UPTIMER_PUBLIC_HOMEPAGE_ARTIFACT_FRAGMENT_WRITES = "0"
-UPTIMER_SCHEDULED_SHARDED_SKIP_HOMEPAGE_REFRESH = "0"
-UPTIMER_SCHEDULED_SHARDED_CONTINUATION = "0"
-UPTIMER_INTERNAL_CHECK_BATCH_FRAGMENT_WRITE_SPLIT = "0"
+# Runtime profile. Individual UPTIMER_* vars still override profile defaults.
+# low-write: Free Plan / small deployments; 5-minute public snapshot cadence.
+# balanced: monolithic snapshots with 60-second cadence.
+# high-scale: fragment/sharded pipeline with 60-second cadence.
+UPTIMER_PROFILE = "low-write"
+UPTIMER_PUBLIC_SNAPSHOT_FRESHNESS_SECONDS = "300"
 
-# Retained high-scale tuning values; ignored while the fragment/sharded flags above are disabled.
+# Advanced overrides. Leave the profile-owned feature flags unset unless you need
+# to override one profile default explicitly.
 UPTIMER_SHARDED_ASSEMBLER_MODE = "json"
 UPTIMER_SHARDED_FRAGMENT_SEED_BATCH_SIZE = "4"
 UPTIMER_SHARDED_RUNTIME_UPDATE_BATCH_SIZE = "5"

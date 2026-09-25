@@ -1280,6 +1280,7 @@ export async function refreshPublicHomepageSnapshotIfNeeded(opts: {
   compute: () => Promise<unknown>;
   trace?: Trace;
   force?: boolean;
+  minRefreshIntervalSeconds?: number;
   seedDataSnapshot?: boolean;
 }): Promise<boolean> {
   if (!opts.force) {
@@ -1288,7 +1289,12 @@ export async function refreshPublicHomepageSnapshotIfNeeded(opts: {
       'homepage_refresh_read_generated_at_1',
       async () => await readHomepageSnapshotGeneratedAt(opts.db),
     );
-    if (generatedAt !== null && isSameMinute(generatedAt, opts.now)) {
+    if (
+      generatedAt !== null &&
+      (opts.minRefreshIntervalSeconds !== undefined
+        ? Math.max(0, opts.now - generatedAt) < opts.minRefreshIntervalSeconds
+        : isSameMinute(generatedAt, opts.now))
+    ) {
       return false;
     }
   }
@@ -1316,7 +1322,12 @@ export async function refreshPublicHomepageSnapshotIfNeeded(opts: {
         'homepage_refresh_read_generated_at_2',
         async () => await readHomepageSnapshotGeneratedAt(opts.db),
       );
-      if (latestGeneratedAt !== null && isSameMinute(latestGeneratedAt, opts.now)) {
+      if (
+        latestGeneratedAt !== null &&
+        (opts.minRefreshIntervalSeconds !== undefined
+          ? Math.max(0, opts.now - latestGeneratedAt) < opts.minRefreshIntervalSeconds
+          : isSameMinute(latestGeneratedAt, opts.now))
+      ) {
         return false;
       }
     }

@@ -1,4 +1,5 @@
 import type { Env } from '../env';
+import { readProfileBoolean } from '../config/profile';
 import {
   refreshMonitorRuntimeSnapshotFromUpdateFragments,
   refreshMonitorRuntimeSnapshotFromUpdateFragmentsPage,
@@ -87,30 +88,27 @@ function readAssemblyMode(env: Env): ShardedPublicSnapshotAssemblyMode {
 }
 
 function canRefreshRuntimeFragments(env: Env): boolean {
-  return isTruthyEnvFlag((env as unknown as Record<string, unknown>).UPTIMER_SCHEDULED_RUNTIME_FRAGMENT_REFRESH);
+  return readProfileBoolean(env, 'UPTIMER_SCHEDULED_RUNTIME_FRAGMENT_REFRESH');
 }
 
 function canSeedShardedFragments(env: Env): boolean {
-  const raw = env as unknown as Record<string, unknown>;
   return (
-    isTruthyEnvFlag(raw.UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED) &&
-    isTruthyEnvFlag(raw.UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED') &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED')
   );
 }
 
 function canAssembleShardedSnapshots(env: Env): boolean {
-  const raw = env as unknown as Record<string, unknown>;
   return (
-    isTruthyEnvFlag(raw.UPTIMER_PUBLIC_SHARDED_ASSEMBLER) &&
-    isTruthyEnvFlag(raw.UPTIMER_SCHEDULED_SHARDED_ASSEMBLER)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_ASSEMBLER') &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_ASSEMBLER')
   );
 }
 
 function shouldPublishShardedSnapshots(env: Env): boolean {
-  const raw = env as unknown as Record<string, unknown>;
   return (
-    isTruthyEnvFlag(raw.UPTIMER_PUBLIC_SHARDED_SNAPSHOT_PUBLISH) &&
-    isTruthyEnvFlag(raw.UPTIMER_SCHEDULED_SHARDED_PUBLISH)
+    readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_SNAPSHOT_PUBLISH') &&
+    readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_PUBLISH')
   );
 }
 

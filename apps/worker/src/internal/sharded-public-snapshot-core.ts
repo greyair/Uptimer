@@ -1,4 +1,5 @@
 import type { Env } from '../env';
+import { readProfileBoolean } from '../config/profile';
 import type { PublicHomepageResponse } from '../schemas/public-homepage';
 import type { PublicStatusResponse } from '../schemas/public-status';
 import {
@@ -116,27 +117,12 @@ function bodyJsonBytes(bodyJson: string, enabled: boolean): number | undefined {
   return enabled ? bodyJson.length : undefined;
 }
 
-function isTruthyEnvFlag(value: unknown): boolean {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized === '1' ||
-    normalized === 'true' ||
-    normalized === 'yes' ||
-    normalized === 'on'
-  );
-}
-
 function shouldWriteHomepageArtifactFragments(env: Env): boolean {
-  const raw = (env as unknown as Record<string, unknown>).UPTIMER_PUBLIC_HOMEPAGE_ARTIFACT_FRAGMENT_WRITES;
-  return isTruthyEnvFlag(raw);
+  return readProfileBoolean(env, 'UPTIMER_PUBLIC_HOMEPAGE_ARTIFACT_FRAGMENT_WRITES');
 }
 
 function shouldSeedHomepageFromRuntimeSnapshot(env: Env): boolean {
-  const raw = (env as unknown as Record<string, unknown>).UPTIMER_PUBLIC_SHARDED_HOMEPAGE_RUNTIME_SEED;
-  return isTruthyEnvFlag(raw);
+  return readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_HOMEPAGE_RUNTIME_SEED');
 }
 
 const RAW_PUBLIC_SNAPSHOT_FUTURE_TOLERANCE_SECONDS = 60;

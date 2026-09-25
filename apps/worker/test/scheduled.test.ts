@@ -478,6 +478,18 @@ describe('scheduler/scheduled regression', () => {
     expect(runHttpCheck).not.toHaveBeenCalled();
   });
 
+  it('skips idle public snapshot refreshes in low-write profile', async () => {
+    const env = createEnv({ dueRows: [] }) as unknown as Env;
+    env.UPTIMER_PROFILE = 'low-write';
+    const waitUntil = vi.fn();
+
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    expect(acquireLease).not.toHaveBeenCalled();
+    expect(refreshPublicHomepageSnapshotIfNeeded).not.toHaveBeenCalled();
+  });
+
   it('queues homepage refresh without acquiring the scheduler lease when no monitors are due', async () => {
     const env = createEnv({ dueRows: [] });
     const waitUntil = vi.fn();
@@ -493,6 +505,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now: expectedNow,
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
     const refreshArgs = vi.mocked(refreshPublicHomepageSnapshotIfNeeded).mock.calls[0]?.[0];
@@ -545,6 +558,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now,
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
     expect(computePublicHomepagePayload).not.toHaveBeenCalled();
@@ -598,6 +612,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now,
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
     expect(dispatchWebhookToChannels).toHaveBeenCalledWith(
@@ -1610,6 +1625,7 @@ describe('scheduler/scheduled regression', () => {
         db: env.DB,
         now: Math.floor(Date.now() / 1000),
         compute: expect.any(Function),
+        minRefreshIntervalSeconds: 60,
         seedDataSnapshot: true,
       });
     } finally {
@@ -1665,6 +1681,7 @@ describe('scheduler/scheduled regression', () => {
       db: env.DB,
       now: Math.floor(Date.now() / 1000),
       compute: expect.any(Function),
+      minRefreshIntervalSeconds: 60,
       seedDataSnapshot: true,
     });
   });
@@ -1696,6 +1713,7 @@ describe('scheduler/scheduled regression', () => {
         db: env.DB,
         now: delayedNow,
         compute: expect.any(Function),
+        minRefreshIntervalSeconds: 60,
         seedDataSnapshot: true,
       });
     } finally {

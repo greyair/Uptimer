@@ -9,6 +9,8 @@ export interface Env {
 
   // Optional dev-only trace secret. If set, trace headers are honored only when
   // callers present `X-Uptimer-Trace-Token`.
+  UPTIMER_PROFILE?: string;
+  UPTIMER_PUBLIC_SNAPSHOT_FRESHNESS_SECONDS?: string;
   UPTIMER_TRACE_TOKEN?: string;
   TRACE_TOKEN?: string;
   UPTIMER_HOMEPAGE_RESIDUAL_TRACE?: string;
