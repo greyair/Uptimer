@@ -138,7 +138,24 @@ Delivered and validated:
   - no additional synthetic D1 reads.
 - Detailed measurements are recorded in [P2 Scheduler Scale and Write Benchmark](benchmarks/p2-scale.md).
 
-Acceptance: satisfied in CI/synthetic validation. Production D1 Diagnostics should be used after deployment to confirm billed-row behavior.
+Production acceptance (2026-09-25):
+
+- Production validation ran on 5 active monitors with intervals around 292–300 seconds.
+- The active Globalping monitor (`neodb`, 292-second interval) completed 12 checks in the selected 1h window.
+- Latest Globalping state continued to update at monitor cadence; the latest check was at 19:22 UTC while the latest retained history sample was at 19:12 UTC.
+- Direct D1 history inspection found 4 `globalping_history` rows in the same 1h window.
+- The 4 retained samples were spaced exactly 900 seconds apart: min/avg/max gap = 900/900/900 seconds, with no gap below the 15-minute steady-state cadence.
+- The production result therefore matches the synthetic benchmark exactly: 12 checks → 4 steady-state history rows (-66.7% versus writing history on every check).
+- Public snapshots remained fresh (~44 seconds at diagnostics time), the legacy fragment table remained idle, and the previous heavy uptime/window-scan queries did not reappear.
+- The direct history-interval diagnostic is intentionally manual-only; its read cost is not part of the production hot path.
+
+Acceptance: satisfied in policy tests, scheduler persistence tests, synthetic benchmark, and direct production D1 validation.
+
+Next observation step:
+
+- Keep the current production deployment unchanged for several days and watch D1 Diagnostics for regressions or unexpected write/read hotspots.
+- Then increase the production monitor count gradually and rerun the same 1h/24h diagnostics at each useful scale point.
+- Use those measurements, rather than monitor count alone, to decide whether P2.3 or the P3 100+ monitor/high-scale work is warranted.
 
 ### P2.3 — MCP operational enhancements
 

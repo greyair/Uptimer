@@ -77,7 +77,31 @@ The benchmark does not model failures in this steady-state row. Separate policy 
 
 The local timing changed from about 0.429 ms to 0.518 ms in this run. Because this is sub-millisecond CI timing while the measured D1 operation count decreases, the timing delta is treated as runner noise rather than a production regression.
 
-P2.2 therefore meets the synthetic write-reduction target: a stable five-minute Globalping monitor reduces history writes by two thirds without adding D1 reads or reducing latest-result update frequency. Production D1 Diagnostics remains the source of truth for billed row consumption after deployment.
+P2.2 therefore meets the synthetic write-reduction target: a stable five-minute Globalping monitor reduces history writes by two thirds without adding D1 reads or reducing latest-result update frequency.
+
+### Production D1 acceptance
+
+A post-deployment manual D1 Diagnostics run on 2026-09-25 directly queried the production tables instead of relying only on the experimental D1 Insights Top-20 ranking.
+
+Production had 5 active monitors at roughly 292–300 second intervals. The active Globalping monitor, `neodb`, used a 292-second interval and produced the following 1h result:
+
+| Production metric | Result |
+| --- | ---: |
+| Monitor checks | 12 |
+| Retained Globalping history rows | 4 |
+| Minimum history gap | 900 s |
+| Average history gap | 900 s |
+| Maximum history gap | 900 s |
+| History gaps below 15 minutes | 0 |
+| History gaps at/above 15 minutes | 3 |
+
+The retained history samples were at 18:27, 18:42, 18:57, and 19:12 UTC. The latest Globalping check had already advanced to 19:22 UTC, confirming that current regional state still updates independently of the downsampled history cadence.
+
+This production result exactly matches the deterministic benchmark's 12 checks → 4 history writes expectation, a 66.7% reduction from the previous every-check history policy during stable operation. Public snapshots were about 44 seconds old at diagnostics time, the legacy fragment table remained idle, and the earlier heavy uptime/window-scan queries were absent.
+
+The manual history-gap diagnostic itself read 754 rows in this run. It is a manually triggered validation query and is not part of the scheduler or public-request hot path.
+
+Production acceptance is therefore complete. The next capacity step is operational observation for several days followed by gradual monitor-count increases and repeated 1h/24h D1 Diagnostics before considering further scale changes.
 
 ## High-scale limitation
 
