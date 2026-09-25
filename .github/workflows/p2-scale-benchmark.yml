@@ -43,7 +43,7 @@ jobs:
         env:
           SCHEDULER_BENCH_RUNS: '8'
           SCHEDULER_BENCH_WARMUPS: '2'
-          SCHEDULER_BENCH_WRITE_JSON: p2-scale-results.json
+          SCHEDULER_BENCH_WRITE_JSON: ../../p2-scale-results.json
         run: |
           set -o pipefail
           pnpm --filter @uptimer/worker bench:scheduler | tee p2-scale-output.txt
@@ -58,9 +58,9 @@ jobs:
             echo
             echo 'Local timing is a regression signal only and is not Cloudflare CPU billing data.'
             echo
-            echo '\`\`\`text'
+            echo '```text'
             cat p2-scale-output.txt 2>/dev/null || true
-            echo '\`\`\`'
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark artifact
