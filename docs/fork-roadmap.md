@@ -106,6 +106,8 @@ Acceptance:
 
 ### P2.2 — Globalping history downsampling
 
+**Status: complete**
+
 Goal: reduce history-table writes without reducing freshness of the latest regional status.
 
 Target behavior:
@@ -120,13 +122,23 @@ Target behavior:
 - Ensure charts remain correct with irregular/downsampled timestamps.
 - Keep retention behavior unchanged unless measurements justify a separate change.
 
-Acceptance:
+Delivered and validated:
 
-- Latest Globalping status remains as fresh as the monitor cadence.
-- Stable 5-minute Globalping monitors reduce history writes by roughly two thirds in the ideal steady state.
-- Transitions and recoveries are never hidden by downsampling.
-- Unit/integration tests cover stable, failure, recovery, and cadence-boundary cases.
-- Re-run P2.1 benchmark after implementation and compare write counts.
+- Latest Globalping results remain updated on every monitor check.
+- Stable history is persisted on a 15-minute cadence.
+- Region status/error transitions and recovery bypass the cadence and persist immediately.
+- The existing `globalping_history` schema/API and retention behavior remain compatible.
+- Policy tests cover first sample, stable cadence, failure, error appearance, and recovery.
+- Scheduler persistence tests verify latest-result writes and history-write suppression/transition behavior.
+- The P2 benchmark was rerun against the P1 production baseline:
+  - 12 five-minute checks over one stable hour;
+  - latest-result writes: 12 → 12;
+  - history writes: 12 → 4 (-66.7%);
+  - synthetic D1 writes: 48 → 40 (-16.7%);
+  - no additional synthetic D1 reads.
+- Detailed measurements are recorded in [P2 Scheduler Scale and Write Benchmark](benchmarks/p2-scale.md).
+
+Acceptance: satisfied in CI/synthetic validation. Production D1 Diagnostics should be used after deployment to confirm billed-row behavior.
 
 ### P2.3 — MCP operational enhancements
 

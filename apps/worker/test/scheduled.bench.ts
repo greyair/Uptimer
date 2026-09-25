@@ -8,9 +8,28 @@ vi.mock('../src/monitor/http', () => ({
 vi.mock('../src/monitor/tcp', () => ({
   runTcpCheck: vi.fn(),
 }));
+vi.mock('../src/monitor/globalping', () => ({
+  runGlobalpingHttpCheck: vi.fn(async () => ({
+    status: 'up',
+    latencyMs: 42,
+    httpStatus: 200,
+    error: null,
+    attempts: 1,
+    location: 'globalping',
+    regionResults: [
+      {
+        location: 'Tokyo, JP',
+        status: 'up',
+        latencyMs: 42,
+        httpStatus: 200,
+        error: null,
+      },
+    ],
+  })),
+}));
 
 import type { Env } from '../src/env';
-import { runScheduledTick } from '../src/scheduler/scheduled';
+import { runPersistedMonitorBatch, runScheduledTick } from '../src/scheduler/scheduled';
 import {
   createFakeD1Database,
   type FakeD1ExecutionObserver,
@@ -37,6 +56,8 @@ type Sample = {
   checkResultWrites: number;
   stateWrites: number;
   snapshotWrites: number;
+  globalpingLatestWrites: number;
+  globalpingHistoryWrites: number;
   serviceCalls: number;
 };
 
@@ -128,6 +149,8 @@ function createEnvForScenario(scenario: Scenario): {
     checkResultWrites: 0,
     stateWrites: 0,
     snapshotWrites: 0,
+    globalpingLatestWrites: 0,
+    globalpingHistoryWrites: 0,
     serviceCalls: 0,
   };
   const allRows = makeDueRows(scenario.monitorCount);
@@ -336,6 +359,15 @@ function createEnvForScenario(scenario: Scenario): {
         ) {
           sampleState.snapshotWrites += 1;
         }
+        if (
+          normalizedSql.includes('update monitor_extensions') &&
+          normalizedSql.includes('globalping_last_results_json')
+        ) {
+          sampleState.globalpingLatestWrites += 1;
+        }
+        if (normalizedSql.includes('insert into globalping_history')) {
+          sampleState.globalpingHistoryWrites += 1;
+        }
       } else {
         sampleState.d1Reads += 1;
       }
@@ -356,6 +388,174 @@ function createEnvForScenario(scenario: Scenario): {
       UPTIMER_SCHEDULED_REFRESH_LOGS: '0',
     } as unknown as Env,
     sampleState,
+  };
+}
+
+async function runGlobalpingHistoryOne(): Promise<Sample> {
+  const sampleState: Omit<Sample, 'elapsedMs'> = {
+    batchCalls: 0,
+    statementCount: 0,
+    waitUntilCalls: 0,
+    d1Reads: 0,
+    d1Writes: 0,
+    lockWrites: 0,
+    checkResultWrites: 0,
+    stateWrites: 0,
+    snapshotWrites: 0,
+    globalpingLatestWrites: 0,
+    globalpingHistoryWrites: 0,
+    serviceCalls: 0,
+  };
+  const persistence = {
+    previousResultsJson: null as string | null,
+    lastHistoryWrittenAt: null as number | null,
+  };
+
+  const handlers: FakeD1QueryHandler[] = [
+    {
+      match: 'insert into check_results',
+      run: () => ({ meta: { changes: 1 } }),
+    },
+    {
+      match: 'insert into monitor_state',
+      run: () => ({ meta: { changes: 1 } }),
+    },
+    {
+      match: 'into outages',
+      run: () => ({ meta: { changes: 0 } }),
+    },
+    {
+      match: 'update outages',
+      run: () => ({ meta: { changes: 0 } }),
+    },
+    {
+      match: (sql) =>
+        sql.includes('update monitor_extensions') &&
+        sql.includes('globalping_last_results_json'),
+      run: (args) => {
+        persistence.previousResultsJson =
+          typeof args[0] === 'string' ? args[0] : persistence.previousResultsJson;
+        return { meta: { changes: 1 } };
+      },
+    },
+    {
+      match: 'insert into globalping_history',
+      run: (args) => {
+        persistence.lastHistoryWrittenAt = Number(args[1]);
+        return { meta: { changes: 1 } };
+      },
+    },
+  ];
+
+  const observer: FakeD1ExecutionObserver = {
+    onExecute(method, normalizedSql) {
+      if (method !== 'run') {
+        sampleState.d1Reads += 1;
+        return;
+      }
+
+      sampleState.d1Writes += 1;
+      if (normalizedSql.includes('insert into check_results')) {
+        sampleState.checkResultWrites += 1;
+      }
+      if (normalizedSql.includes('insert into monitor_state')) {
+        sampleState.stateWrites += 1;
+      }
+      if (
+        normalizedSql.includes('update monitor_extensions') &&
+        normalizedSql.includes('globalping_last_results_json')
+      ) {
+        sampleState.globalpingLatestWrites += 1;
+      }
+      if (normalizedSql.includes('insert into globalping_history')) {
+        sampleState.globalpingHistoryWrites += 1;
+      }
+    },
+  };
+
+  const db = createFakeD1Database(handlers, observer);
+  const originalBatch = db.batch.bind(db);
+  db.batch = async (statements) => {
+    sampleState.batchCalls += 1;
+    sampleState.statementCount += statements.length;
+    return originalBatch(statements);
+  };
+
+  const baseCheckedAt = 1_700_000_000;
+  const started = performance.now();
+
+  // Twelve five-minute checks model one steady hour. P2.1 writes one history
+  // row per check; P2.2 should keep all twelve latest-result writes while
+  // retaining only the 0/15/30/45-minute history samples.
+  for (let index = 0; index < 12; index += 1) {
+    const checkedAt = baseCheckedAt + index * 300;
+    await runPersistedMonitorBatch({
+      db,
+      rows: [
+        {
+          id: 1,
+          name: 'Globalping benchmark',
+          type: 'http',
+          target: 'https://example.com/health',
+          display_url: null,
+          interval_sec: 300,
+          created_at: baseCheckedAt - 86_400,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo']),
+          globalping_last_results_json: persistence.previousResultsJson,
+          globalping_history_last_written_at: persistence.lastHistoryWrittenAt,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: checkedAt - 300,
+          last_changed_at: baseCheckedAt - 3600,
+          consecutive_failures: 0,
+          consecutive_successes: 3,
+        } as never,
+      ],
+      checkedAt,
+      stateMachineConfig: {
+        failuresToDownFromUp: 2,
+        successesToUpFromDown: 2,
+      },
+    });
+  }
+
+  return {
+    elapsedMs: performance.now() - started,
+    ...sampleState,
+  };
+}
+
+async function benchmarkGlobalpingHistoryScenario() {
+  for (let index = 0; index < WARMUP_RUNS; index += 1) {
+    await runGlobalpingHistoryOne();
+  }
+
+  const samples: Sample[] = [];
+  for (let index = 0; index < MEASURE_RUNS; index += 1) {
+    samples.push(await runGlobalpingHistoryOne());
+  }
+
+  return {
+    label: BENCH_LABEL,
+    scenario: 'low-write / 1 Globalping monitor / 60m steady (12 checks)',
+    monitorCount: 1,
+    dueCount: 1,
+    schedule: 'staggered' as const,
+    profile: 'low-write' as const,
+    withChannel: false,
+    ...summarize(samples),
   };
 }
 
@@ -412,6 +612,8 @@ function summarize(samples: Sample[]) {
   const checkResultWrites = samples.map((sample) => sample.checkResultWrites);
   const stateWrites = samples.map((sample) => sample.stateWrites);
   const snapshotWrites = samples.map((sample) => sample.snapshotWrites);
+  const globalpingLatestWrites = samples.map((sample) => sample.globalpingLatestWrites);
+  const globalpingHistoryWrites = samples.map((sample) => sample.globalpingHistoryWrites);
   const serviceCalls = samples.map((sample) => sample.serviceCalls);
   const average = (values: number[]) =>
     values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -434,6 +636,8 @@ function summarize(samples: Sample[]) {
     checkResultWritesAvg: average(checkResultWrites),
     stateWritesAvg: average(stateWrites),
     snapshotWritesAvg: average(snapshotWrites),
+    globalpingLatestWritesAvg: average(globalpingLatestWrites),
+    globalpingHistoryWritesAvg: average(globalpingHistoryWrites),
     serviceCallsAvg: average(serviceCalls),
   };
 }
@@ -468,6 +672,7 @@ describe('scheduler benchmark', () => {
       for (const scenario of SCENARIOS) {
         rows.push(await benchmarkScenario(scenario));
       }
+      rows.push(await benchmarkGlobalpingHistoryScenario());
     });
 
     const payload = JSON.stringify(rows, null, 2);
@@ -477,7 +682,7 @@ describe('scheduler benchmark', () => {
       console.log(payload);
     }
 
-    expect(rows).toHaveLength(SCENARIOS.length);
+    expect(rows).toHaveLength(SCENARIOS.length + 1);
     expect(rows.every((row) => Number(row.monitorCount) >= Number(row.dueCount))).toBe(true);
   }, 120_000);
 });

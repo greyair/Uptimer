@@ -156,11 +156,17 @@ function createEnv(options: CreateEnvOptions = {}): Env {
     },
     {
       match: 'update monitor_extensions',
-      run: () => ({ meta: { changes: 1 } }),
+      run: (args, normalizedSql) => {
+        onRun?.(normalizedSql, args);
+        return { meta: { changes: 1 } };
+      },
     },
     {
       match: 'insert into globalping_history',
-      run: () => ({ meta: { changes: 1 } }),
+      run: (args, normalizedSql) => {
+        onRun?.(normalizedSql, args);
+        return { meta: { changes: 1 } };
+      },
       all: () => [],
     },
     {
@@ -476,6 +482,254 @@ describe('scheduler/scheduled regression', () => {
       }),
     );
     expect(runHttpCheck).not.toHaveBeenCalled();
+  });
+
+  it('updates latest Globalping results but skips stable history inside 15 minutes', async () => {
+    const checkedAt = Math.floor(Math.floor(Date.now() / 1000) / 60) * 60;
+    const previousResults = [
+      {
+        location: 'Tokyo, JP',
+        status: 'up',
+        latencyMs: 35,
+        httpStatus: 200,
+        error: null,
+      },
+    ];
+    const writes: Array<{ sql: string; args: unknown[] }> = [];
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 9,
+          name: 'Global API',
+          type: 'http',
+          target: 'https://example.com/health',
+          interval_sec: 300,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo']),
+          globalping_last_results_json: JSON.stringify(previousResults),
+          globalping_history_last_written_at: checkedAt - 300,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: checkedAt - 300,
+          last_changed_at: checkedAt - 3600,
+          consecutive_failures: 0,
+          consecutive_successes: 3,
+        },
+      ],
+      onRun: (sql, args) => writes.push({ sql, args }),
+    }) as unknown as Env;
+    env.GLOBALPING_API_TOKEN = 'test-globalping-token';
+    vi.mocked(runGlobalpingHttpCheck).mockResolvedValueOnce({
+      status: 'up',
+      latencyMs: 49,
+      httpStatus: 200,
+      error: null,
+      attempts: 1,
+      location: 'globalping',
+      regionResults: [{ ...previousResults[0]!, latencyMs: 49 }],
+    });
+
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    const extensionWrite = writes.find((write) => write.sql.includes('update monitor_extensions'));
+    expect(extensionWrite).toBeDefined();
+    expect(extensionWrite?.args[1]).toBe(checkedAt);
+    expect(extensionWrite?.args[2]).toBe(0);
+    expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(false);
+  });
+
+  it('persists stable Globalping history at the 15-minute cadence boundary', async () => {
+    const checkedAt = Math.floor(Math.floor(Date.now() / 1000) / 60) * 60;
+    const previousResults = [
+      {
+        location: 'Tokyo, JP',
+        status: 'up',
+        latencyMs: 35,
+        httpStatus: 200,
+        error: null,
+      },
+    ];
+    const writes: Array<{ sql: string; args: unknown[] }> = [];
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 9,
+          name: 'Global API',
+          type: 'http',
+          target: 'https://example.com/health',
+          interval_sec: 300,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo']),
+          globalping_last_results_json: JSON.stringify(previousResults),
+          globalping_history_last_written_at: checkedAt - 900,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: checkedAt - 300,
+          last_changed_at: checkedAt - 3600,
+          consecutive_failures: 0,
+          consecutive_successes: 3,
+        },
+      ],
+      onRun: (sql, args) => writes.push({ sql, args }),
+    }) as unknown as Env;
+    env.GLOBALPING_API_TOKEN = 'test-globalping-token';
+
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
+    const extensionWrite = writes.find((write) => write.sql.includes('update monitor_extensions'));
+    expect(extensionWrite?.args[2]).toBe(1);
+  });
+
+  it('persists Globalping history immediately on a regional failure', async () => {
+    const checkedAt = Math.floor(Math.floor(Date.now() / 1000) / 60) * 60;
+    const previousResults = [
+      {
+        location: 'Tokyo, JP',
+        status: 'up',
+        latencyMs: 35,
+        httpStatus: 200,
+        error: null,
+      },
+    ];
+    const writes: Array<{ sql: string; args: unknown[] }> = [];
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 9,
+          name: 'Global API',
+          type: 'http',
+          target: 'https://example.com/health',
+          interval_sec: 300,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo']),
+          globalping_last_results_json: JSON.stringify(previousResults),
+          globalping_history_last_written_at: checkedAt - 300,
+          state_status: 'up',
+          state_last_error: null,
+          last_checked_at: checkedAt - 300,
+          last_changed_at: checkedAt - 3600,
+          consecutive_failures: 0,
+          consecutive_successes: 3,
+        },
+      ],
+      onRun: (sql, args) => writes.push({ sql, args }),
+    }) as unknown as Env;
+    env.GLOBALPING_API_TOKEN = 'test-globalping-token';
+    vi.mocked(runGlobalpingHttpCheck).mockResolvedValueOnce({
+      status: 'down',
+      latencyMs: null,
+      httpStatus: null,
+      error: 'Tokyo: timeout',
+      attempts: 1,
+      location: 'globalping',
+      regionResults: [
+        {
+          location: 'Tokyo, JP',
+          status: 'down',
+          latencyMs: null,
+          httpStatus: null,
+          error: 'timeout',
+        },
+      ],
+    });
+
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
+  });
+
+  it('persists Globalping history immediately on regional recovery', async () => {
+    const checkedAt = Math.floor(Math.floor(Date.now() / 1000) / 60) * 60;
+    const previousResults = [
+      {
+        location: 'Tokyo, JP',
+        status: 'down',
+        latencyMs: null,
+        httpStatus: null,
+        error: 'timeout',
+      },
+    ];
+    const writes: Array<{ sql: string; args: unknown[] }> = [];
+    const env = createEnv({
+      dueRows: [
+        {
+          id: 9,
+          name: 'Global API',
+          type: 'http',
+          target: 'https://example.com/health',
+          interval_sec: 300,
+          timeout_ms: 10_000,
+          http_method: 'GET',
+          http_headers_json: null,
+          http_body: null,
+          follow_redirects: 1,
+          expected_status_json: null,
+          forbidden_status_json: null,
+          response_keyword: null,
+          response_keyword_mode: null,
+          response_forbidden_keyword: null,
+          response_forbidden_keyword_mode: null,
+          probe_mode: 'globalping',
+          globalping_locations_json: JSON.stringify(['Tokyo']),
+          globalping_last_results_json: JSON.stringify(previousResults),
+          globalping_history_last_written_at: checkedAt - 300,
+          state_status: 'down',
+          state_last_error: 'Tokyo: timeout',
+          last_checked_at: checkedAt - 300,
+          last_changed_at: checkedAt - 300,
+          consecutive_failures: 2,
+          consecutive_successes: 0,
+        },
+      ],
+      onRun: (sql, args) => writes.push({ sql, args }),
+    }) as unknown as Env;
+    env.GLOBALPING_API_TOKEN = 'test-globalping-token';
+
+    const waitUntil = vi.fn();
+    await runScheduledTick(env, { waitUntil } as unknown as ExecutionContext);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0] as Promise<unknown>));
+
+    expect(writes.some((write) => write.sql.includes('insert into globalping_history'))).toBe(true);
   });
 
   it('skips idle public snapshot refreshes in low-write profile', async () => {

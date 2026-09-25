@@ -1,0 +1,2 @@
+ALTER TABLE monitor_extensions
+ADD COLUMN globalping_history_last_written_at INTEGER;

@@ -1,5 +1,7 @@
 import pLimit from 'p-limit';
 
+import { shouldPersistGlobalpingHistory } from '../monitor/globalping-history';
+
 import {
   expectedStatusJsonSchema,
   forbiddenStatusJsonSchema,
@@ -829,6 +831,8 @@ export type DueMonitorRow = {
   response_forbidden_keyword_mode: HttpResponseMatchMode | null;
   probe_mode: string | null;
   globalping_locations_json: string | null;
+  globalping_last_results_json: string | null;
+  globalping_history_last_written_at: number | null;
   state_status: string | null;
   state_last_error: string | null;
   last_checked_at: number | null;
@@ -911,6 +915,8 @@ const LIST_DUE_MONITORS_SQL = `
     m.response_forbidden_keyword_mode,
     e.probe_mode,
     e.globalping_locations_json,
+    e.globalping_last_results_json,
+    e.globalping_history_last_written_at,
     s.status AS state_status,
     s.last_error AS state_last_error,
     s.last_checked_at,
@@ -1713,27 +1719,37 @@ async function persistCompletedMonitors(
 
       if (monitor.outcome.location === 'globalping') {
         const regionResultsJson = JSON.stringify(monitor.outcome.regionResults ?? []);
+        const persistHistory = shouldPersistGlobalpingHistory({
+          checkedAt: monitor.checkedAt,
+          lastHistoryWrittenAt: monitor.row.globalping_history_last_written_at,
+          previousResultsJson: monitor.row.globalping_last_results_json,
+          currentResults: monitor.outcome.regionResults ?? [],
+        });
         statements.push(
           db
             .prepare(
               `UPDATE monitor_extensions
                SET globalping_last_results_json = ?1,
                    globalping_last_checked_at = ?2,
+                   globalping_history_last_written_at =
+                     CASE WHEN ?3 = 1 THEN ?2 ELSE globalping_history_last_written_at END,
                    updated_at = ?2
-               WHERE monitor_id = ?3`,
+               WHERE monitor_id = ?4`,
             )
-            .bind(regionResultsJson, monitor.checkedAt, monitor.row.id),
+            .bind(regionResultsJson, monitor.checkedAt, persistHistory ? 1 : 0, monitor.row.id),
         );
-        statements.push(
-          db
-            .prepare(
-              `INSERT INTO globalping_history (monitor_id, checked_at, results_json)
-               VALUES (?1, ?2, ?3)
-               ON CONFLICT(monitor_id, checked_at) DO UPDATE SET
-                 results_json = excluded.results_json`,
-            )
-            .bind(monitor.row.id, monitor.checkedAt, regionResultsJson),
-        );
+        if (persistHistory) {
+          statements.push(
+            db
+              .prepare(
+                `INSERT INTO globalping_history (monitor_id, checked_at, results_json)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(monitor_id, checked_at) DO UPDATE SET
+                   results_json = excluded.results_json`,
+              )
+              .bind(monitor.row.id, monitor.checkedAt, regionResultsJson),
+          );
+        }
       }
     }
 
