@@ -235,6 +235,29 @@ function createEnvForScenario(scenario: Scenario): {
       all: () => [],
     },
     {
+      // The same P1 fallback reads the current-day check stream in one
+      // monitor-id batch. Return stable "up" checks for the requested ids.
+      match: (sql) =>
+        sql.includes('from check_results') &&
+        sql.includes('where monitor_id in (') &&
+        sql.includes('and checked_at >=') &&
+        sql.includes('and checked_at <') &&
+        sql.includes('order by monitor_id, checked_at'),
+      all: (args) => {
+        const monitorIds = args
+          .slice(0, Math.max(0, args.length - 2))
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value));
+        return monitorIds.flatMap((monitorId) =>
+          Array.from({ length: 12 }, (_, index) => ({
+            monitor_id: monitorId,
+            checked_at: 1_700_000_000 - (11 - index) * 300,
+            status: 'up',
+          })),
+        );
+      },
+    },
+    {
       match: 'from public_snapshots',
       first: (args) =>
         args[0] === 'homepage:artifact' && homepageArtifactGeneratedAt > 0
