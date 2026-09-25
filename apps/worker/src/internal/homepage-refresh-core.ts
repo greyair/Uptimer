@@ -1,4 +1,5 @@
 import type { Env } from '../env';
+import { readPublicSnapshotFreshnessSeconds } from '../config/profile';
 import type { Trace } from '../observability/trace';
 import type { PublicStatusResponse } from '../schemas/public-status';
 import { LeaseLostError, startRenewableLease } from '../scheduler/lease-guard';
@@ -358,6 +359,12 @@ export async function runInternalHomepageRefreshCore({
         )
       : await import('../snapshots/public-homepage-read');
 
+    const scheduledFreshnessSeconds = readPublicSnapshotFreshnessSeconds(env);
+    const isScheduledSnapshotFresh = (generatedAt: number): boolean =>
+      scheduledRefreshRequest
+        ? Math.max(0, now - generatedAt) < scheduledFreshnessSeconds
+        : isSameMinuteTimestamp(generatedAt, now);
+
     if (!skipInitialFreshnessCheck) {
       const generatedAt = trace
         ? await trace.timeAsync(
@@ -365,7 +372,7 @@ export async function runInternalHomepageRefreshCore({
             async () => await readHomepageSnapshotGeneratedAt(env.DB, now),
           )
         : await readHomepageSnapshotGeneratedAt(env.DB, now);
-      if (generatedAt !== null && isSameMinuteTimestamp(generatedAt, now)) {
+      if (generatedAt !== null && isScheduledSnapshotFresh(generatedAt)) {
         trace?.setLabel('skip', 'fresh');
         return toInternalHomepageRefreshCoreResult(true, false, { skip: 'fresh' });
       }
@@ -436,7 +443,7 @@ export async function runInternalHomepageRefreshCore({
     if (
       shouldHonorFreshAfterLeaseGate &&
       baseSnapshot.generatedAt !== null &&
-      isSameMinuteTimestamp(baseSnapshot.generatedAt, now)
+      isScheduledSnapshotFresh(baseSnapshot.generatedAt)
     ) {
       trace?.setLabel('skip', 'fresh_after_lease');
       return toInternalHomepageRefreshCoreResult(true, false, {
