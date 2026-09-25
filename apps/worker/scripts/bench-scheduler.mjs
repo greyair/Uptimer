@@ -164,6 +164,12 @@ function summarizeComparison(baselineRows, currentRows) {
       batchCalls: `${baselineRow.batchCallsAvg} -> ${currentRow.batchCallsAvg}`,
       statements: `${baselineRow.statementCountAvg} -> ${currentRow.statementCountAvg}`,
       waitUntil: `${baselineRow.waitUntilCallsAvg} -> ${currentRow.waitUntilCallsAvg}`,
+      d1Reads: `${baselineRow.d1ReadsAvg} -> ${currentRow.d1ReadsAvg}`,
+      d1Writes: `${baselineRow.d1WritesAvg} -> ${currentRow.d1WritesAvg}`,
+      lockWrites: `${baselineRow.lockWritesAvg} -> ${currentRow.lockWritesAvg}`,
+      checkWrites: `${baselineRow.checkResultWritesAvg} -> ${currentRow.checkResultWritesAvg}`,
+      stateWrites: `${baselineRow.stateWritesAvg} -> ${currentRow.stateWritesAvg}`,
+      snapshotWrites: `${baselineRow.snapshotWritesAvg} -> ${currentRow.snapshotWritesAvg}`,
     };
   });
 }
