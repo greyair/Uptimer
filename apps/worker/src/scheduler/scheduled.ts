@@ -45,7 +45,6 @@ const LOCK_LEASE_SECONDS = 135;
 const LOCK_RENEW_INTERVAL_MS = 45_000;
 const LOCK_RENEW_MIN_REMAINING_SECONDS = 45;
 const INTERNAL_PROTOCOL_FORMAT = 'compact-v1';
-const INTERNAL_SCHEDULED_BATCH_SIZE = 6;
 const INTERNAL_SCHEDULED_BATCH_CONCURRENCY = 2;
 const HOMEPAGE_REFRESH_SERVICE_TIMEOUT_MS = 15_000;
 const RUNTIME_FRAGMENTS_REFRESH_SERVICE_TIMEOUT_MS = 15_000;
@@ -182,7 +181,6 @@ function shouldRefreshRuntimeFragmentsViaService(env: Env): boolean {
 }
 
 function shouldUseScheduledRuntimeFragmentPipeline(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
     shouldRefreshRuntimeFragmentsViaService(env) &&
@@ -195,7 +193,6 @@ function shouldSplitInternalCheckBatchFragmentWrites(env: Env): boolean {
 }
 
 function shouldSeedScheduledShardedFragments(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
     readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_FRAGMENT_SEED') &&
@@ -204,7 +201,6 @@ function shouldSeedScheduledShardedFragments(env: Env): boolean {
 }
 
 function shouldAssembleScheduledShardedSnapshots(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
     readProfileBoolean(env, 'UPTIMER_PUBLIC_SHARDED_ASSEMBLER') &&
@@ -213,7 +209,6 @@ function shouldAssembleScheduledShardedSnapshots(env: Env): boolean {
 }
 
 function shouldSkipScheduledHomepageRefreshForShardedSnapshots(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
     readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_SKIP_HOMEPAGE_REFRESH') &&
@@ -222,7 +217,6 @@ function shouldSkipScheduledHomepageRefreshForShardedSnapshots(env: Env): boolea
 }
 
 function shouldUseScheduledShardedContinuation(env: Env): boolean {
-  const rawEnv = env as unknown as Record<string, unknown>;
   return (
     Boolean(env.SELF) &&
     readProfileBoolean(env, 'UPTIMER_SCHEDULED_SHARDED_CONTINUATION') &&
